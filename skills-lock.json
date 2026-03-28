@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "nestjs-expert": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "1d7b951493beb88c0eabaeb81253f31f1acc2fd6b67e4cb7e9678bf1dc83b261"
+    },
+    "typescript-advanced-types": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "0eff06f50a8b14255c25b5ba7fdf152fff4e28ad571cbc3e09e37266c602e623"
+    },
+    "typescript-expert": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "f0f625132cf53116cb27725926e2c99f142861b9063d459938dd85fbf8e2bf61"
+    }
+  }
+}
