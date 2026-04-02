@@ -9,7 +9,7 @@
 
 ## 1. Обзор и архитектура
 
-Бэкенд StreetEye MVP — NestJS-монолит с модульной структурой. Каждый домен изолирован в отдельный модуль. Внешние зависимости минимальны: PostgreSQL как основная БД, Redis для хранения refresh-токенов и rate-limiting, Resend для email.
+Бэкенд StreetEye MVP — NestJS-монолит с модульной структурой. Каждый домен изолирован в отдельный модуль. Внешние зависимости минимальны: PostgreSQL как основная БД (включая хранение refresh-токенов), Redis для rate-limiting и кэширования, Resend для email.
 
 Монолит выбран намеренно: он поддерживается одним разработчиком, легко деплоится через Docker Compose и не требует оркестрации до 50 000 пользователей. Разбивка на микросервисы — после MVP при реальной нагрузке.
 
@@ -17,13 +17,15 @@
 
 | Модуль | Ответственность | Зависимости |
 |---|---|---|
-| AuthModule | Регистрация, вход, токены, сброс пароля | UsersModule, MailModule, Redis |
+| AuthModule | Регистрация, вход, токены, сброс пароля | UsersModule, MailModule |
 | UsersModule | Профиль, уровень, предпочтения | — |
 | TasksModule | База заданий, фильтрация, выборка | UsersModule |
 | SessionsModule | Активная сессия задания пользователя | TasksModule, UsersModule |
 | JournalModule | Записи дневника, самооценка, заметки | SessionsModule, UsersModule |
 | BadgesModule | Логика выдачи бейджей, трекинг | JournalModule, UsersModule |
 | MailModule | Отправка писем через Resend. Шаблоны на ru и en — язык выбирается по полю `locale` пользователя | — |
+| NotificationsModule | Хранение push-токенов, отправка push-уведомлений через Expo Push API | UsersModule |
+| SubscriptionsModule | Верификация покупок (App Store / Google Play), статус подписки, лимиты Free/Premium | UsersModule |
 | HealthModule | Health-check эндпоинт для мониторинга | — |
 
 ### 1.2 Стек технологий
@@ -68,6 +70,8 @@ src/
 ├── journal/                   # JournalModule
 ├── badges/                    # BadgesModule
 ├── mail/                      # MailModule
+├── notifications/             # NotificationsModule
+├── subscriptions/             # SubscriptionsModule
 └── health/                    # HealthModule
 ```
 
@@ -216,6 +220,50 @@ enum SessionStatus { ACTIVE COMPLETED SKIPPED SAVED_FOR_LATER }
 enum SelfRating    { FAILED PARTIAL SUCCESS }
 enum EmailTokenType { VERIFY_EMAIL RESET_PASSWORD }
 enum Locale        { EN RU }
+enum Platform      { IOS ANDROID }
+enum SubscriptionStatus { ACTIVE EXPIRED CANCELLED }
+```
+
+### 2.9 Таблица push_tokens
+
+```prisma
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique          // Expo push token
+  platform  Platform                  // IOS | ANDROID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+}
+```
+
+### 2.10 Таблица subscriptions
+
+```prisma
+model Subscription {
+  id              String             @id @default(uuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        Platform           // IOS | ANDROID
+  productId       String             // 'streeteye_premium_monthly'
+  transactionId   String             @unique
+  receipt         String             @db.Text
+  status          SubscriptionStatus @default(ACTIVE) // ACTIVE | EXPIRED | CANCELLED
+  expiresAt       DateTime
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  @@index([userId])
+  @@index([userId, status])
+}
+```
+
+**Дополнение к модели User:** к связям User добавляются:
+
+```prisma
+  pushTokens      PushToken[]
+  subscriptions   Subscription[]
 ```
 
 ---
@@ -330,9 +378,8 @@ class UserProfileDto {
 2. Получает ID последних 5 заданий пользователя из `task_sessions`
 3. Делает запрос к БД: `WHERE level = :level AND category IN (:categories) AND id NOT IN (:recentIds) AND isActive = true ORDER BY RANDOM() LIMIT 1`
 4. Если результат пуст (все задания просмотрены) — убирает фильтр `recentIds`, повторяет запрос
-5. Создаёт запись в `task_sessions` со статусом `ACTIVE`
-6. Возвращает задание + `sessionId`
-7. Перед отдачей: разрешает локаль из заголовка `Accept-Language` (en | ru, fallback → en). Возвращает `title`, `description`, `tip` уже на нужном языке — клиент не знает о полях `_ru`/`_en` в БД
+5. **Не создаёт сессию.** Возвращает задание без фиксации — пользователь может нажать «Другое задание» несколько раз (Free: 1 раз, Premium: 3 раза за сессию приложения)
+6. Перед отдачей: разрешает локаль из заголовка `Accept-Language` (en | ru, fallback → en). Возвращает `title`, `description`, `tip` уже на нужном языке — клиент не знает о полях `_ru`/`_en` в БД
 
 ### 5.3 Response: TaskDto
 
@@ -346,7 +393,6 @@ class TaskDto {
   level:        Level;
   durationMins: number;
   tags:         string[];
-  sessionId:    string;  // ID созданной TaskSession
 }
 ```
 
@@ -360,6 +406,7 @@ class TaskDto {
 
 | Метод | Путь | Описание |
 |---|---|---|
+| POST | `/sessions` | Создать сессию для задания. Вызывается при нажатии «Взять это». Тело: `{ taskId }`. Возвращает `sessionId`. Запрещено, если уже есть `ACTIVE` сессия |
 | GET | `/sessions/active` | Активная сессия пользователя. Возвращает задание + sessionId или 404 |
 | PATCH | `/sessions/:id` | Обновить статус сессии: `COMPLETED` \| `SKIPPED` \| `SAVED_FOR_LATER` |
 | GET | `/sessions` | История сессий. Query: `status`, `limit` (max 50), `cursor` (cursor-based pagination) |
@@ -433,7 +480,8 @@ class JournalStatsDto {
 
 - Streak — количество календарных дней подряд, в которых есть хотя бы одна `COMPLETED` сессия
 - Считается по UTC-дате `completedAt`
-- Пропущенный день (`SKIPPED`) не обнуляет streak
+- День засчитывается в streak, если в нём есть хотя бы одна `COMPLETED` сессия — наличие `SKIPPED` сессий в тот же день не влияет на streak
+- День без единой `COMPLETED` сессии обнуляет streak, даже если в этот день есть `SKIPPED` задания
 - Если последнее выполненное задание было вчера или сегодня — streak продолжается
 - Вычисляется при каждом запросе `/journal/stats` (не хранится как отдельное поле, кэшируется в Redis на 5 минут)
 
@@ -467,6 +515,149 @@ class JournalStatsDto {
 4. Возвращает массив новых бейджей (может быть пустым)
 
 Вызов асинхронный, не блокирует ответ на `PATCH /sessions/:id`.
+
+---
+
+## 8a. NotificationsModule — push-уведомления
+
+Push-уведомления отправляются через Expo Push API. Бэкенд хранит push-токены устройств и формирует уведомления на нужном языке по полю `locale` пользователя.
+
+### 8a.1 Эндпоинты
+
+| Метод | Путь | Описание | Auth |
+|---|---|---|---|
+| POST | `/users/me/push-token` | Сохранить или обновить push-токен устройства. Тело: `{ token, platform }` | JWT |
+| DELETE | `/users/me/push-token` | Удалить push-токен (при выходе из аккаунта) | JWT |
+
+### 8a.2 DTO: SavePushTokenDto
+
+```typescript
+class SavePushTokenDto {
+  @IsString()
+  token: string;  // Expo push token: ExponentPushToken[...]
+
+  @IsEnum(Platform)
+  platform: Platform;  // IOS | ANDROID
+}
+```
+
+### 8a.3 Типы уведомлений
+
+| Тип | Триггер | Формируется | Текст (пример) |
+|---|---|---|---|
+| Ежедневное напоминание | Cron-задача по расписанию пользователя | Бэкенд | «Время выйти на улицу. Новое задание ждёт» |
+| Бейдж получен | После `checkAndAward` при выдаче нового бейджа | Бэкенд | «Новый бейдж: Серия x3 🔥» |
+| Streak под угрозой | Cron в 20:00 UTC, если нет `COMPLETED` за сегодня | Бэкенд | «Серия прервётся сегодня. Успейте выполнить задание» |
+| Таймер задания | Локальное уведомление на устройстве | Клиент | «Время вышло. Как прошла съёмка?» |
+
+### 8a.4 Отправка через Expo Push API
+
+```typescript
+// notifications/notifications.service.ts
+async sendPush(userId: string, titleKey: string, bodyKey: string, data?: Record<string, string>): Promise<void> {
+  const user = await this.usersService.findById(userId);
+  const tokens = await this.prisma.pushToken.findMany({ where: { userId } });
+  if (!tokens.length) return;
+
+  const locale = user.locale.toLowerCase(); // 'en' | 'ru'
+  const title = this.i18n.t(titleKey, { lng: locale });
+  const body = this.i18n.t(bodyKey, { lng: locale });
+
+  await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tokens.map(t => ({
+      to: t.token,
+      title,
+      body,
+      data,
+    }))),
+  });
+}
+```
+
+### 8a.5 Cron-задачи
+
+Используется `@nestjs/schedule` (cron):
+
+- **Ежедневное напоминание** — `0 10 * * *` (10:00 UTC). Отправляется пользователям, у которых нет `ACTIVE` или `COMPLETED` сессии за сегодня
+- **Streak под угрозой** — `0 20 * * *` (20:00 UTC). Отправляется пользователям с `currentStreak >= 1`, у которых нет `COMPLETED` за сегодня
+
+---
+
+## 8b. SubscriptionsModule — подписки и монетизация
+
+Управляет статусом подписки пользователя. Верифицирует покупки через App Store / Google Play. Предоставляет информацию о лимитах Free/Premium плана.
+
+### 8b.1 Эндпоинты
+
+| Метод | Путь | Описание | Auth |
+|---|---|---|---|
+| POST | `/subscriptions/verify` | Верифицировать покупку. Тело: `{ receipt, platform, productId }` | JWT |
+| GET | `/subscriptions/status` | Текущий статус подписки и лимиты | JWT |
+| POST | `/subscriptions/restore` | Восстановить покупку (проверяет receipt заново) | JWT |
+
+### 8b.2 Логика верификации покупки
+
+1. Получает `receipt` и `platform` от клиента
+2. Для iOS — валидирует receipt через Apple App Store Server API
+3. Для Android — валидирует через Google Play Developer API
+4. При успехе — создаёт или обновляет запись в таблице `subscriptions`
+5. Возвращает обновлённый статус подписки
+
+### 8b.3 DTO: VerifyPurchaseDto
+
+```typescript
+class VerifyPurchaseDto {
+  @IsString()
+  receipt: string;
+
+  @IsEnum(Platform)
+  platform: Platform;  // IOS | ANDROID
+
+  @IsString()
+  productId: string;   // 'streeteye_premium_monthly'
+}
+```
+
+### 8b.4 Response: SubscriptionStatusDto
+
+```typescript
+class SubscriptionStatusDto {
+  isPremium:        boolean;
+  plan:             'free' | 'premium';
+  expiresAt:        string | null;  // ISO 8601, null для Free
+  limits: {
+    tasksPerMonth:       number;  // Free: 10, Premium: unlimited (-1)
+    anotherTaskPerSession: number;  // Free: 1, Premium: 3
+    journalEntriesVisible: number;  // Free: 10, Premium: unlimited (-1)
+  };
+}
+```
+
+### 8b.5 Лимиты Free / Premium
+
+| Параметр | Free | Premium ($3.99/мес) |
+|---|---|---|
+| Задания в месяц | 10 | Без ограничений |
+| «Другое задание» за сессию | 1 | 3 |
+| Записи дневника | Последние 10 | Полная история |
+| Бейджи | 2 из 4 | Все 4 |
+| Пробный период | — | 7 дней бесплатно |
+
+### 8b.6 Дополнение к UserProfileDto
+
+Поле `isPremium` добавляется в ответ `GET /users/me`:
+
+```typescript
+class UserProfileDto {
+  // ... существующие поля ...
+  isPremium:            boolean;    // true если есть активная подписка
+  subscriptionExpiresAt: string | null;
+}
+```
+
+Значение `isPremium` вычисляется: `EXISTS(subscription WHERE userId = :id AND status = 'ACTIVE' AND expiresAt > NOW())`.
 
 ---
 
@@ -538,6 +729,8 @@ class JournalStatsDto {
 | `POST /auth/forgot-password` | 3 / 10 мин на IP | Защита от спама email |
 | `POST /auth/resend-verify` | 3 / 10 мин на IP | Защита от спама email |
 | `GET /tasks/random` | 10 / мин на user | Лимит на переключение заданий |
+| `POST /subscriptions/verify` | 5 / мин на user | Защита от спама верификации |
+| `POST /users/me/push-token` | 5 / мин на user | Защита от спама токенов |
 
 ### 9.4 Переменные окружения
 
@@ -569,6 +762,13 @@ APP_BASE_URL=https://streeteye.app
 # Локализация
 DEFAULT_LOCALE=en             # fallback если Accept-Language не поддерживается
 SUPPORTED_LOCALES=en,ru       # список через запятую — валидируется при старте
+
+# Push-уведомления (Expo)
+EXPO_ACCESS_TOKEN=<токен для Expo Push API>
+
+# In-App Purchases
+APPLE_SHARED_SECRET=<shared secret для верификации App Store receipts>
+GOOGLE_SERVICE_ACCOUNT_KEY=<путь к JSON-ключу сервисного аккаунта Google Play>
 ```
 
 ### 9.5 Конфигурация ConfigModule
@@ -678,9 +878,11 @@ GET /health
 - `AuthModule`: forgot-password → reset-password флоу
 - `AuthModule`: rate limiting (мок throttler)
 - `TasksModule`: логика `/tasks/random` (исключение последних 5, fallback при пустом результате)
-- `SessionsModule`: переход статусов, запрет двух активных сессий
-- `JournalModule`: вычисление streak (граничные случаи: один день, пропуск, длинная серия)
+- `SessionsModule`: создание сессии (`POST /sessions`), переход статусов, запрет двух активных сессий
+- `JournalModule`: вычисление streak (граничные случаи: один день, пропуск, SKIPPED + COMPLETED в один день, длинная серия)
 - `BadgesModule`: каждое условие бейджа отдельно
+- `SubscriptionsModule`: верификация покупки, проверка статуса, истечение подписки
+- `NotificationsModule`: сохранение/удаление push-токена, формирование уведомления по локали
 
 ### 11.3 Тестовая БД
 
@@ -696,11 +898,12 @@ GET /health
 |---|---|---|---|
 | 1 | Фундамент | Инициализация NestJS, TypeScript конфиг; Docker Compose: postgres + redis + api; Prisma setup, schema.prisma, первая миграция; ConfigModule с Joi-валидацией env | Запускающийся проект с БД |
 | 2 | Безопасность | Helmet, CORS, GlobalExceptionFilter; TransformInterceptor (формат ответов); @nestjs/throttler глобально + per-route; HealthModule | `GET /health` возвращает 200 |
-| 3–4 | AuthModule | UsersModule (CRUD профиля); Passport Local Strategy, bcrypt; JWT access + refresh tokens, Redis; MailModule + Resend + шаблоны писем на ru и en; Все 9 auth эндпоинтов + unit + e2e тесты | Полный цикл auth работает |
-| 5–6 | TasksModule | Модель Task с полями `_ru`/`_en`, seed-скрипт (30 заданий, JSON с ru + en контентом); SessionsModule: статусы, активная сессия; `GET /tasks/random` с логикой исключений и разрешением локали по Accept-Language; Тесты логики randomizer | Мобильное приложение может получать задания |
+| 3–4 | AuthModule | UsersModule (CRUD профиля); Passport Local Strategy, bcrypt; JWT access + refresh tokens (PostgreSQL); MailModule + Resend + шаблоны писем на ru и en; Все 9 auth эндпоинтов + unit + e2e тесты | Полный цикл auth работает |
+| 5–6 | TasksModule | Модель Task с полями `_ru`/`_en`, seed-скрипт (30 заданий, JSON с ru + en контентом); SessionsModule: `POST /sessions` для создания сессии, статусы, активная сессия; `GET /tasks/random` с логикой исключений и разрешением локали по Accept-Language; Тесты логики randomizer | Мобильное приложение может получать задания |
 | 7 | JournalModule | CRUD записей дневника; `GET /journal/stats` со streak-логикой; Redis кэш для stats (5 мин); Тесты граничных случаев streak | Дневник полностью работает |
-| 8 | BadgesModule | 4 бейджа, checkAndAward логика; Интеграция с SessionsModule; Seed бейджей в БД; Тесты условий каждого бейджа | Бейджи выдаются автоматически |
-| 9–10 | Полировка | E2E тесты всех критических флоу; GitHub Actions CI/CD пайплайн; Деплой на VPS, prod Docker Compose; Нагрузочный тест (Artillery): 100 rps; Документация API (Swagger через @nestjs/swagger) | Бэкенд готов к публичному запуску |
+| 8 | BadgesModule + NotificationsModule | 4 бейджа, checkAndAward логика; Seed бейджей в БД; Push-токены (`POST /users/me/push-token`); Cron-задачи напоминаний и streak-уведомлений; Тесты условий бейджей | Бейджи и push-уведомления работают |
+| 9 | SubscriptionsModule | Верификация покупок App Store / Google Play; `GET /subscriptions/status`; Лимиты Free/Premium; `isPremium` в `UserProfileDto`; Тесты верификации и лимитов | Монетизация на бэкенде готова |
+| 10 | Полировка | E2E тесты всех критических флоу; GitHub Actions CI/CD пайплайн; Деплой на VPS, prod Docker Compose; Нагрузочный тест (Artillery): 100 rps; Документация API (Swagger через @nestjs/swagger) | Бэкенд готов к публичному запуску |
 
 ---
 
@@ -743,13 +946,13 @@ GET /health
 
 ## Итого
 
-Бэкенд StreetEye MVP — 8 модулей, 30 эндпоинтов, полная схема БД из 8 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
+Бэкенд StreetEye MVP — 10 модулей, 37 эндпоинтов, полная схема БД из 10 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
 
 | Параметр | Значение | Комментарий |
 |---|---|---|
-| Модулей | 8 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Health |
-| Эндпоинтов | 30 | Полный API для мобильного клиента |
-| Таблиц в БД | 8 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges |
+| Модулей | 10 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Notifications, Subscriptions, Health |
+| Эндпоинтов | 37 | Полный API для мобильного клиента, включая push-токены и подписки |
+| Таблиц в БД | 10 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges, PushTokens, Subscriptions |
 | Поддерживаемые языки | 2 | EN (default) + RU. Accept-Language + locale в профиле + env fallback |
 | Платные зависимости | 0 | Resend: 3 000 писем/мес бесплатно — хватит на MVP |
 | Срок разработки | 10 недель | 1 backend-разработчик, параллельно с мобилкой |

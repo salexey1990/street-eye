@@ -48,20 +48,25 @@ MailModule      → (no deps)
 HealthModule    → (no deps)
 ```
 
-**Planned `src/` structure (not yet fully implemented):**
+**Current `src/` structure (implemented modules marked ✅):**
 ```
 src/
-├── common/          # JwtAuthGuard, RolesGuard, @CurrentUser, @Public, GlobalExceptionFilter, interceptors
-├── config/          # ConfigModule with Joi env validation
-├── prisma/          # PrismaService, schema.prisma, migrations/
-├── auth/            # JWT + refresh tokens, email verification, password reset
-├── users/           # Profile, skill level (BEGINNER|INTERMEDIATE|PRO), preferred categories
-├── tasks/           # Assignment database, filtering by level/category
-├── sessions/        # Active task session per user
-├── journal/         # Completed assignments with photos, notes, self-evaluation
-├── badges/          # Achievement logic and milestone tracking
-├── mail/            # Resend SDK, bilingual templates (ru/en via user.locale)
-└── health/          # Health-check endpoint
+├── common/          ✅ JwtAuthGuard, @CurrentUser, @Public, GlobalExceptionFilter, TransformInterceptor, Swagger helpers
+├── config/          ✅ ConfigModule with Joi env validation (env.validation.ts)
+├── prisma/          ✅ PrismaService + PrismaModule
+├── auth/            ✅ JWT + refresh tokens (Redis), email verification, password reset
+│   ├── dto/         ✅ login, register, refresh, forgot-password, reset-password, verify-email, resend-verify
+│   └── strategies/  ✅ jwt.strategy.ts
+├── users/           ✅ Profile CRUD, change password
+│   └── dto/         ✅ update-user, change-password
+├── mail/            ✅ Resend SDK, bilingual HTML templates (verify-email, reset-password ru/en)
+├── health/          ✅ Health-check endpoint
+├── tasks/           ✅ Task CRUD, random selection with locale resolution, seed data (30 tasks)
+│   └── dto/         ✅ task.dto, tasks-query.dto
+├── sessions/        ✅ Active session management, status transitions, cursor pagination
+│   └── dto/         ✅ update-session.dto, sessions-query.dto
+├── journal/         ⬜ Completed assignments with photos, notes, self-evaluation
+└── badges/          ⬜ Achievement logic and milestone tracking
 ```
 
 ## Database (Prisma + PostgreSQL)
