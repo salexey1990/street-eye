@@ -33,7 +33,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const { status, code, message, details } = this.resolveException(exception);
 
     if (status >= 500) {
-      this.logger.error(`${request.method} ${request.url}`, exception instanceof Error ? exception.stack : String(exception));
+      this.logger.error(
+        exception instanceof Error ? exception.stack : String(exception),
+      );
     }
 
     const body: ErrorResponse = {
