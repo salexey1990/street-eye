@@ -164,6 +164,94 @@ describe('TasksService', () => {
     });
   });
 
+  describe('findRandomGuest', () => {
+    it('should return a task matching provided filters without user auth', async () => {
+      mockPrisma.task.count.mockResolvedValue(1);
+      mockPrisma.task.findMany.mockResolvedValue([mockTask]);
+
+      const result = await service.findRandomGuest({
+        level: 'BEGINNER',
+        categories: ['VISUAL'],
+        locale: 'EN',
+      });
+
+      expect(result.title).toBe('Shadows Only');
+      expect(mockPrisma.task.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            level: 'BEGINNER',
+            category: { in: ['VISUAL'] },
+          }),
+        }),
+      );
+    });
+
+    it('should resolve locale from query parameter, not Accept-Language', async () => {
+      mockPrisma.task.count.mockResolvedValue(1);
+      mockPrisma.task.findMany.mockResolvedValue([mockTask]);
+
+      const result = await service.findRandomGuest({
+        level: 'BEGINNER',
+        categories: ['VISUAL'],
+        locale: 'RU',
+      });
+
+      expect(result.title).toBe('Только тени');
+      expect(result.description).toBe('Описание на русском');
+    });
+
+    it('should not exclude recent tasks (guest has no history)', async () => {
+      mockPrisma.task.count.mockResolvedValue(1);
+      mockPrisma.task.findMany.mockResolvedValue([mockTask]);
+
+      await service.findRandomGuest({
+        level: 'BEGINNER',
+        categories: ['VISUAL'],
+        locale: 'EN',
+      });
+
+      expect(mockPrisma.task.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ id: expect.anything() }),
+        }),
+      );
+      // Confirm no session queries were made
+      expect(mockPrisma.taskSession.findMany).not.toHaveBeenCalled();
+    });
+
+    it('should support multiple categories', async () => {
+      mockPrisma.task.count.mockResolvedValue(1);
+      mockPrisma.task.findMany.mockResolvedValue([mockTask]);
+
+      await service.findRandomGuest({
+        level: 'INTERMEDIATE',
+        categories: ['VISUAL', 'SOCIAL'],
+        locale: 'EN',
+      });
+
+      expect(mockPrisma.task.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            category: { in: ['VISUAL', 'SOCIAL'] },
+            level: 'INTERMEDIATE',
+          }),
+        }),
+      );
+    });
+
+    it('should throw NotFoundException when no tasks match filters', async () => {
+      mockPrisma.task.count.mockResolvedValue(0);
+
+      await expect(
+        service.findRandomGuest({
+          level: 'PRO',
+          categories: ['RESTRICTION'],
+          locale: 'EN',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('findById', () => {
     it('should return localized task', async () => {
       mockPrisma.task.findUnique.mockResolvedValue(mockTask);

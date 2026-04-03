@@ -39,13 +39,17 @@ async function bootstrap() {
         '**Localisation:** Pass `Accept-Language: ru` or `Accept-Language: en` to get localised content (default: `en`).\n\n' +
         '**Response format:** All responses are wrapped: `{ success, data, meta: { timestamp } }`.',
       )
-      .setVersion('1.0')
+      .setVersion('1.2')
       .addBearerAuth(
         { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', in: 'header' },
         'access-token',
       )
       .addTag('auth', 'Registration, login, token management, password reset')
       .addTag('users', 'User profile management')
+      .addTag('tasks', 'Photography assignments — random selection, guest preview, browse')
+      .addTag('sessions', 'Active session management and history')
+      .addTag('notifications', 'Expo push token registration and removal')
+      .addTag('subscriptions', 'In-app purchase verification and Free/Premium status')
       .addTag('health', 'Service health check')
       .build();
 

@@ -34,7 +34,11 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto, locale: 'en' | 'ru' = 'en') {
-    const user = await this.usersService.create(dto.email, dto.password);
+    const user = await this.usersService.create(dto.email, dto.password, {
+      level: dto.level,
+      preferredCategories: dto.preferredCategories,
+      locale: dto.locale,
+    });
 
     const token = await this.createEmailToken(user.id, 'VERIFY_EMAIL', 24 * 60 * 60);
     await this.mailService.sendVerifyEmail(user.email, token, locale);

@@ -107,9 +107,47 @@ describe('AuthService', () => {
 
       const result = await service.register({ email: 'test@example.com', password: 'pass1234' });
 
-      expect(mockUsersService.create).toHaveBeenCalledWith('test@example.com', 'pass1234');
+      expect(mockUsersService.create).toHaveBeenCalledWith(
+        'test@example.com',
+        'pass1234',
+        { level: undefined, preferredCategories: undefined, locale: undefined },
+      );
       expect(mockMailService.sendVerifyEmail).toHaveBeenCalled();
       expect(result.message).toContain('verify');
+    });
+
+    it('passes onboarding fields to usersService.create', async () => {
+      mockUsersService.create.mockResolvedValue(mockUser);
+      mockPrisma.emailToken.deleteMany.mockResolvedValue({ count: 0 });
+      mockPrisma.emailToken.create.mockResolvedValue({});
+
+      await service.register({
+        email: 'test@example.com',
+        password: 'pass1234',
+        level: 'INTERMEDIATE',
+        preferredCategories: ['VISUAL', 'SOCIAL'],
+        locale: 'RU',
+      });
+
+      expect(mockUsersService.create).toHaveBeenCalledWith(
+        'test@example.com',
+        'pass1234',
+        { level: 'INTERMEDIATE', preferredCategories: ['VISUAL', 'SOCIAL'], locale: 'RU' },
+      );
+    });
+
+    it('uses Accept-Language locale for verification email', async () => {
+      mockUsersService.create.mockResolvedValue(mockUser);
+      mockPrisma.emailToken.deleteMany.mockResolvedValue({ count: 0 });
+      mockPrisma.emailToken.create.mockResolvedValue({});
+
+      await service.register({ email: 'test@example.com', password: 'pass1234' }, 'ru');
+
+      expect(mockMailService.sendVerifyEmail).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'ru',
+      );
     });
 
     it('propagates ConflictException when email already exists', async () => {

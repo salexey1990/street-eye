@@ -52,7 +52,10 @@ export class AuthController {
   @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @ApiOperation({
     summary: 'Register a new user',
-    description: 'Creates an account and sends a verification email. Account is inactive until email is verified.',
+    description:
+      'Creates an account and sends a verification email. Account is inactive until email is verified.\n\n' +
+      'Optionally accepts onboarding data collected before registration (`level`, `preferredCategories`, `locale`). ' +
+      'If omitted, Prisma defaults apply (`BEGINNER`, `[VISUAL]`, `EN`).',
   })
   @ApiResponse({
     status: 201,

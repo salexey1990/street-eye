@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Task } from '@prisma/client';
+import { Category, Level, Task } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TasksQueryDto } from './dto/tasks-query.dto';
 import { TaskDto } from './dto/task.dto';
+import { GuestRandomTaskQueryDto } from './dto/guest-random-task-query.dto';
 
 @Injectable()
 export class TasksService {
@@ -42,6 +43,12 @@ export class TasksService {
     }
 
     return this.toDto(task, locale);
+  }
+
+  async findRandomGuest(query: GuestRandomTaskQueryDto): Promise<TaskDto> {
+    const task = await this.findRandomTask(query.level, query.categories, []);
+    if (!task) throw new NotFoundException('No tasks available for your filters');
+    return this.toDto(task, query.locale.toLowerCase());
   }
 
   async findById(id: string, locale: string): Promise<TaskDto> {

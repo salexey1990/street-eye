@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
@@ -11,6 +12,8 @@ import { UsersModule } from './users/users.module';
 import { MailModule } from './mail/mail.module';
 import { TasksModule } from './tasks/tasks.module';
 import { SessionsModule } from './sessions/sessions.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LocaleInterceptor } from './common/interceptors/locale.interceptor';
@@ -24,6 +27,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       validationOptions: { abortEarly: false },
     }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    ScheduleModule.forRoot(),
     PrismaModule,
     HealthModule,
     MailModule,
@@ -31,6 +35,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     AuthModule,
     TasksModule,
     SessionsModule,
+    NotificationsModule,
+    SubscriptionsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

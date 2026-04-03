@@ -13,6 +13,7 @@ import {
   ApiBearerAuth,
   ApiHeader,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { TasksService } from './tasks.service';
@@ -21,6 +22,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/decorators/current-user.decorator';
 import { Locale } from '../common/decorators/locale.decorator';
 import { TasksQueryDto } from './dto/tasks-query.dto';
+import { GuestRandomTaskQueryDto } from './dto/guest-random-task-query.dto';
+import { Public } from '../common/decorators/public.decorator';
 
 const TIMESTAMP = '2026-03-15T10:00:00.000Z';
 const TASK_ID = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
@@ -85,6 +88,56 @@ export class TasksController {
   })
   getRandom(@CurrentUser() user: JwtPayload, @Locale() locale: string) {
     return this.tasksService.findRandom(user.sub, locale);
+  }
+
+  @Get('random/guest')
+  @Public()
+  @Throttle({ default: { ttl: 900000, limit: 5 } })
+  @ApiOperation({
+    summary: 'Get random task for guest (onboarding)',
+    description:
+      'Public endpoint for onboarding step 6 — shown before registration. ' +
+      'Returns a random task matching provided filters. Does not create a session.\n\n' +
+      'Rate limit: **5 requests / 15 min per IP** (stricter than authenticated endpoint).',
+  })
+  @ApiQuery({ name: 'level', enum: ['BEGINNER', 'INTERMEDIATE', 'PRO'], required: true })
+  @ApiQuery({ name: 'categories', enum: ['VISUAL', 'TECHNICAL', 'SOCIAL', 'RESTRICTION'], isArray: true, required: true, description: '1–2 categories' })
+  @ApiQuery({ name: 'locale', enum: ['EN', 'RU'], required: true })
+  @ApiResponse({
+    status: 200,
+    description: 'A random task in the requested locale.',
+    schema: {
+      example: {
+        success: true,
+        data: TASK_EXAMPLE,
+        meta: { timestamp: TIMESTAMP },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation error.',
+    schema: {
+      example: {
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: [] },
+        meta: { timestamp: TIMESTAMP },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 429,
+    description: 'Rate limit exceeded.',
+    schema: {
+      example: {
+        success: false,
+        error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests', details: [] },
+        meta: { timestamp: TIMESTAMP },
+      },
+    },
+  })
+  getRandomGuest(@Query() query: GuestRandomTaskQueryDto) {
+    return this.tasksService.findRandomGuest(query);
   }
 
   @Get(':id')

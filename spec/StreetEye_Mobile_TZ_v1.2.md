@@ -1,10 +1,10 @@
 # StreetEye — Техническое задание: Мобильное приложение MVP
 
-> **Версия:** 1.0 · Март 2026
+> **Версия:** 1.2 · Апрель 2026
 > **Платформы:** iOS 16+, Android 13+
 > **Фреймворк:** React Native + Expo SDK 51
 > **Срок разработки:** 10 недель
-> **Связанные docs:** StreetEye MVP Specification v1.0, StreetEye Backend TZ v1.0
+> **Связанные docs:** StreetEye MVP Specification v1.2, StreetEye Backend TZ v1.2
 
 ---
 
@@ -256,15 +256,56 @@ async function getInitialRoute(): Promise<string> {
 
 Гость (не авторизованный пользователь) может:
 - Пройти онбординг
-- Получить задание
+- Получить задание (через публичный эндпоинт `GET /tasks/random/guest`)
 - Просмотреть совет к заданию
 
 Гость не может:
 - Сохранить запись в дневник
 - Получить бейдж
 - Видеть историю
+- Нажать «Другое задание» (доступно только авторизованным)
 
 При попытке сохранить → показать bottom sheet с предложением зарегистрироваться.
+
+### 2.4 Хранение данных онбординга до регистрации
+
+Все данные, собранные на экранах онбординга, хранятся локально до момента регистрации:
+
+```typescript
+// store/settings.store.ts — данные онбординга
+interface OnboardingData {
+  locale: 'ru' | 'en';
+  level: 'BEGINNER' | 'INTERMEDIATE' | 'PRO';
+  preferredCategories: Category[];  // 1–2 категории
+}
+
+// Сохранение при прохождении онбординга
+await AsyncStorage.setItem('onboarding_data', JSON.stringify({
+  locale,
+  level,
+  preferredCategories,
+}));
+```
+
+При регистрации данные онбординга передаются в тело `POST /auth/register`:
+
+```typescript
+async function register(email: string, password: string): Promise<void> {
+  const raw = await AsyncStorage.getItem('onboarding_data');
+  const onboarding = raw ? JSON.parse(raw) : {};
+
+  const response = await api.post('/auth/register', {
+    email,
+    password,
+    level: onboarding.level,                    // из экрана 3
+    preferredCategories: onboarding.preferredCategories, // из экрана 4
+    locale: onboarding.locale,                  // из экрана 2
+  });
+
+  // Аккаунт создаётся сразу с заполненным профилем
+  // Дополнительный PATCH /users/me не нужен
+}
+```
 
 ---
 
@@ -301,7 +342,7 @@ async function getInitialRoute(): Promise<string> {
 - Чекбокс «Принимаю условия и политику конфиденциальности»
 
 **Действия:**
-- «Создать аккаунт» — валидация на клиенте → `POST /auth/register` → экран подтверждения email
+- «Создать аккаунт» — валидация на клиенте → `POST /auth/register` с данными онбординга из AsyncStorage (`level`, `preferredCategories`, `locale`) → экран подтверждения email
 - «Уже есть аккаунт? Войти» — назад на login
 
 **Клиентская валидация (до запроса):**
@@ -309,6 +350,8 @@ async function getInitialRoute(): Promise<string> {
 - Пароль — длина ≥ 8
 - Пароли совпадают
 - Чекбокс отмечен
+
+**Важно:** при отправке `POST /auth/register` клиент автоматически прикрепляет `level`, `preferredCategories` и `locale` из AsyncStorage (см. раздел 2.4). Пользователь не вводит эти данные повторно — они были собраны на экранах онбординга.
 
 ### 3.3 Экран подтверждения email
 
@@ -367,15 +410,15 @@ api.interceptors.response.use(
 
 Два варианта: «Русский» и «English». По умолчанию выбран язык из `expo-localization`. Если устройство не на ru или en — по умолчанию en.
 
-При выборе: `i18n.changeLanguage(locale)` + запись в AsyncStorage + запись в профиль (если аккаунт уже создан).
+При выборе: `i18n.changeLanguage(locale)` + запись в AsyncStorage (ключ `onboarding_data.locale`). На сервер данные не отправляются — пользователь ещё не зарегистрирован.
 
 ### 4.3 Экран 3 — Уровень `(onboarding)/level.tsx`
 
-Три карточки: «Новичок», «Средний», «Профи». Под каждой — одна строка описания. Одиночный выбор. Сохраняется в `settings.store`.
+Три карточки: «Новичок», «Средний», «Профи». Под каждой — одна строка описания. Одиночный выбор. Сохраняется локально в AsyncStorage (ключ `onboarding_data.level`).
 
 ### 4.4 Экран 4 — Предпочтения `(onboarding)/preferences.tsx`
 
-Четыре категории: «Визуальное», «Техническое», «Социальное», «Ограничения». Мультивыбор, минимум 1, максимум 2. Сохраняется в `settings.store`.
+Четыре категории: «Визуальное», «Техническое», «Социальное», «Ограничения». Мультивыбор, минимум 1, максимум 2. Сохраняется локально в AsyncStorage (ключ `onboarding_data.preferredCategories`).
 
 ### 4.5 Экран 5 — Уведомления `(onboarding)/notifications.tsx`
 
@@ -383,7 +426,25 @@ api.interceptors.response.use(
 
 ### 4.6 Экран 6 — Первое задание `(onboarding)/first-task.tsx`
 
-Показывает первое задание, уже подобранное по уровню и категориям. Запрос к `GET /tasks/random` с заголовком `Accept-Language` по выбранной локали. Кнопка «Пошёл снимать» → переход на главный экран `/(tabs)`.
+Показывает первое задание, уже подобранное по уровню и категориям. Пользователь ещё не зарегистрирован — используется публичный гостевой эндпоинт.
+
+```typescript
+async function fetchFirstTask(): Promise<Task> {
+  const raw = await AsyncStorage.getItem('onboarding_data');
+  const { level, preferredCategories, locale } = JSON.parse(raw);
+
+  const response = await api.get('/tasks/random/guest', {
+    params: {
+      level,
+      categories: preferredCategories.join(','),
+      locale,
+    },
+  });
+  return response.data.data;
+}
+```
+
+Кнопка «Пошёл снимать» → переход на главный экран `/(tabs)`. Сессия на сервере **не создаётся** (гость не может иметь сессию). Задание сохраняется локально в AsyncStorage для отображения на главном экране.
 
 AsyncStorage: `onboarding_complete = true`.
 
@@ -425,6 +486,19 @@ AsyncStorage: `onboarding_complete = true`.
 ```typescript
 // Получить случайное задание (без создания сессии)
 async function fetchRandomTask(): Promise<Task> {
+  const token = await SecureStore.getItemAsync('access_token');
+
+  if (!token) {
+    // Гость — используем публичный эндпоинт
+    const raw = await AsyncStorage.getItem('onboarding_data');
+    const { level, preferredCategories, locale } = JSON.parse(raw);
+    const response = await api.get('/tasks/random/guest', {
+      params: { level, categories: preferredCategories.join(','), locale },
+    });
+    return response.data.data;
+  }
+
+  // Авторизованный — используем защищённый эндпоинт
   const recent = await db.getRecentTaskIds(5);
   const response = await api.get('/tasks/random', {
     headers: { 'Accept-Language': i18n.language },
@@ -433,7 +507,8 @@ async function fetchRandomTask(): Promise<Task> {
   return response.data.data;
 }
 
-// Принять задание — создать сессию (при нажатии «Взять это» / «Пошёл снимать»)
+// Принять задание — создать сессию (при нажатии «Взять это»)
+// Доступно только авторизованным. Гост при нажатии → bottom sheet регистрации
 async function acceptTask(taskId: string): Promise<string> {
   const response = await api.post('/sessions', { taskId });
   const sessionId = response.data.data.id;
@@ -793,8 +868,9 @@ async function syncPendingJournalEntries(): Promise<void> {
 
 ### 12.2 Обязательное покрытие unit-тестами
 
-- `auth.store`: логин, логаут, refresh, guest mode
-- `task.store`: счётчик «Другое задание», лимит Free, логика `SAVED_FOR_LATER`
+- `auth.store`: логин, логаут, refresh, guest mode, регистрация с данными онбординга
+- `task.store`: счётчик «Другое задание», лимит Free, логика `SAVED_FOR_LATER`, переключение гостевой/авторизованный эндпоинт
+- `onboarding`: сохранение/чтение `onboarding_data` из AsyncStorage, передача данных при регистрации
 - `journal/sync`: оффлайн-запись + синхронизация при восстановлении сети
 - `i18n`: смена языка, корректность ключей в обоих локалях
 - `iap`: проверка статуса подписки, лимиты
@@ -802,7 +878,8 @@ async function syncPendingJournalEntries(): Promise<void> {
 ### 12.3 E2E-сценарии (Maestro)
 
 ```yaml
-# flows/onboarding.yaml
+# flows/onboarding-guest.yaml
+# Гостевой флоу: онбординг → первое задание без регистрации
 - launchApp
 - assertVisible: "StreetEye"
 - tapOn: "Начать"
@@ -810,11 +887,33 @@ async function syncPendingJournalEntries(): Promise<void> {
 - tapOn: "Новичок"
 - tapOn: "Визуальное"
 - tapOn: "Позже"   # уведомления
-- assertVisible: "Задание"  # первое задание показано
+- assertVisible: "Задание"  # первое задание загружено через /tasks/random/guest
+- tapOn: "Пошёл снимать"
+- assertVisible: "Получить задание"  # главный экран, состояние B
+```
+
+```yaml
+# flows/guest-to-register.yaml
+# Гость пытается сохранить → регистрация → профиль заполнен данными онбординга
+- tapOn: "Задание выполнено"
+- assertVisible: "Зарегистрируйтесь"  # bottom sheet с предложением
+- tapOn: "Зарегистрироваться"
+- inputText:
+    id: "email-input"
+    text: "test@example.com"
+- inputText:
+    id: "password-input"
+    text: "12345678"
+- inputText:
+    id: "password-confirm-input"
+    text: "12345678"
+- tapOn: "Создать аккаунт"
+- assertVisible: "Письмо отправлено"  # экран подтверждения email
 ```
 
 ```yaml
 # flows/complete-task.yaml
+# Авторизованный пользователь завершает задание
 - tapOn: "Задание выполнено"
 - assertVisible: "Самооценка"
 - tapOn: "Получилось"
@@ -906,9 +1005,9 @@ FIREBASE_APP_ID=...
 
 | Неделя | Модуль | Задачи | Результат |
 |---|---|---|---|
-| 1–2 | Фундамент | Expo проект, навигация (Expo Router), дизайн-система (`theme.ts` по токенам из Pencil-дизайна), API-клиент с interceptors, авторизация (login/register/токены), SecureStore | Авторизация работает |
-| 3–4 | Онбординг | 6 экранов онбординга, i18n setup (ru + en), expo-localization, смена языка, режим гостя, guard для защищённых экранов | Полный онбординг с локализацией |
-| 5–6 | Задание | Главный экран (3 состояния), `GET /tasks/random`, карточка задания, таймер, «Другое задание», «Сохранить на потом», завершение задания | Рандомайзер работает end-to-end |
+| 1–2 | Фундамент | Expo проект, навигация (Expo Router), дизайн-система (`theme.ts` по токенам из Pencil-дизайна), API-клиент с interceptors, авторизация (login/register с данными онбординга/токены), SecureStore | Авторизация работает |
+| 3–4 | Онбординг | 6 экранов онбординга, i18n setup (ru + en), expo-localization, смена языка, хранение данных онбординга в AsyncStorage, гостевой запрос задания (`GET /tasks/random/guest`), режим гостя, guard для защищённых экранов | Полный онбординг с локализацией и гостевым режимом |
+| 5–6 | Задание | Главный экран (3 состояния), `GET /tasks/random` (авторизованный) + fallback на `/tasks/random/guest` (гость), `POST /sessions` при «Взять это», карточка задания, таймер, «Другое задание», «Сохранить на потом», завершение задания, bottom sheet регистрации для гостя | Рандомайзер работает end-to-end |
 | 7 | Дневник | SQLite-схема, создание записи (bottom sheet), список записей, просмотр/редактирование, image picker, оффлайн-синхронизация | Дневник работает локально и онлайн |
 | 8 | Профиль + бейджи | Экран профиля, статистика, 4 бейджа, смена уровня/категорий, push-уведомления, streak-уведомление | Полный профиль |
 | 9 | Монетизация | IAP setup (iOS + Android), paywall экран, лимиты Free, проверка подписки, восстановление покупки | Монетизация работает |
@@ -923,11 +1022,11 @@ FIREBASE_APP_ID=...
 | Экранов | 16 (6 онбординг + 3 таба + 4 флоу + 3 модальных) |
 | Платформы | iOS 16+ и Android 13+ из одной кодовой базы |
 | Языки | ru + en, переключение без перезапуска |
-| Локальное хранение | SQLite (дневник) + SecureStore (токены) + AsyncStorage (настройки) |
+| Локальное хранение | SQLite (дневник) + SecureStore (токены) + AsyncStorage (настройки, данные онбординга) |
 | Оффлайн | Просмотр задания и дневника, отложенная синхронизация записей |
 | Платные зависимости | Apple Developer $99/год, Google Play $25 однократно |
 | Срок | 10 недель, 1 разработчик |
 
 ---
 
-*StreetEye Mobile TZ v1.0 · Март 2026*
+*StreetEye Mobile TZ v1.2 · Апрель 2026*

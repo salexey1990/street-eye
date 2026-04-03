@@ -51,20 +51,24 @@ HealthModule    → (no deps)
 **Current `src/` structure (implemented modules marked ✅):**
 ```
 src/
-├── common/          ✅ JwtAuthGuard, @CurrentUser, @Public, GlobalExceptionFilter, TransformInterceptor, Swagger helpers
+├── common/          ✅ JwtAuthGuard, @CurrentUser, @Public, GlobalExceptionFilter, TransformInterceptor, LocaleInterceptor, Swagger helpers
 ├── config/          ✅ ConfigModule with Joi env validation (env.validation.ts)
 ├── prisma/          ✅ PrismaService + PrismaModule
-├── auth/            ✅ JWT + refresh tokens (Redis), email verification, password reset
-│   ├── dto/         ✅ login, register, refresh, forgot-password, reset-password, verify-email, resend-verify
+├── auth/            ✅ JWT + refresh tokens (PostgreSQL), email verification, password reset
+│   ├── dto/         ✅ login, register (with onboarding fields), refresh, forgot-password, reset-password, verify-email, resend-verify
 │   └── strategies/  ✅ jwt.strategy.ts
-├── users/           ✅ Profile CRUD, change password
+├── users/           ✅ Profile CRUD, change password, isPremium in profile
 │   └── dto/         ✅ update-user, change-password
 ├── mail/            ✅ Resend SDK, bilingual HTML templates (verify-email, reset-password ru/en)
 ├── health/          ✅ Health-check endpoint
-├── tasks/           ✅ Task CRUD, random selection with locale resolution, seed data (30 tasks)
-│   └── dto/         ✅ task.dto, tasks-query.dto
+├── tasks/           ✅ Task CRUD, random selection with locale resolution, guest endpoint, seed data (30 tasks)
+│   └── dto/         ✅ task.dto, tasks-query.dto, guest-random-task-query.dto
 ├── sessions/        ✅ Active session management, status transitions, cursor pagination
 │   └── dto/         ✅ update-session.dto, sessions-query.dto
+├── notifications/   ✅ Push tokens (Expo), cron reminders (daily + streak warnings)
+│   └── dto/         ✅ save-push-token.dto
+├── subscriptions/   ✅ IAP verification (App Store / Google Play), status, limits
+│   └── dto/         ✅ verify-purchase.dto
 ├── journal/         ⬜ Completed assignments with photos, notes, self-evaluation
 └── badges/          ⬜ Achievement logic and milestone tracking
 ```
@@ -93,5 +97,5 @@ Generate client after schema changes: `npx prisma generate`
 ## Specs
 
 Full product and technical specs are in `spec/`:
-- `spec/StreetEye_MVP_Specification.md` — product features, monetization, roadmap
-- `spec/StreetEye_Backend_TZ.md` — complete API endpoints, DB schema, module contracts
+- `spec/StreetEye_MVP_Specification_v1.2.md` — product features, monetization, roadmap
+- `spec/StreetEye_Backend_TZ_v1.2.md` — complete API endpoints, DB schema, module contracts

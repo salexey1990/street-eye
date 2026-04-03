@@ -8,7 +8,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { User } from '@prisma/client';
+import { Category, Level, Locale, User } from '@prisma/client';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -26,13 +26,23 @@ export class UsersService {
     return this.prisma.user.findUnique({ where: { email } });
   }
 
-  async create(email: string, password: string): Promise<User> {
+  async create(
+    email: string,
+    password: string,
+    options?: { level?: Level; preferredCategories?: Category[]; locale?: Locale },
+  ): Promise<User> {
     const existing = await this.findByEmail(email);
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     return this.prisma.user.create({
-      data: { email: email.toLowerCase().trim(), passwordHash },
+      data: {
+        email: email.toLowerCase().trim(),
+        passwordHash,
+        ...(options?.level && { level: options.level }),
+        ...(options?.preferredCategories?.length && { preferredCategories: options.preferredCategories }),
+        ...(options?.locale && { locale: options.locale }),
+      },
     });
   }
 
@@ -65,7 +75,7 @@ export class UsersService {
   async getProfileWithStats(id: string) {
     const user = await this.findById(id);
 
-    const [totalCompleted, badgesEarned, completedDates] = await Promise.all([
+    const [totalCompleted, badgesEarned, completedDates, activeSubscription] = await Promise.all([
       this.prisma.taskSession.count({
         where: { userId: id, status: 'COMPLETED' },
       }),
@@ -74,6 +84,11 @@ export class UsersService {
         where: { userId: id, status: 'COMPLETED', completedAt: { not: null } },
         select: { completedAt: true },
         orderBy: { completedAt: 'desc' },
+      }),
+      this.prisma.subscription.findFirst({
+        where: { userId: id, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+        select: { expiresAt: true },
+        orderBy: { expiresAt: 'desc' },
       }),
     ]);
 
@@ -89,6 +104,8 @@ export class UsersService {
       level: user.level,
       preferredCategories: user.preferredCategories,
       createdAt: user.createdAt.toISOString(),
+      isPremium: activeSubscription !== null,
+      subscriptionExpiresAt: activeSubscription?.expiresAt.toISOString() ?? null,
       stats: { totalCompleted, currentStreak, badgesEarned },
     };
   }

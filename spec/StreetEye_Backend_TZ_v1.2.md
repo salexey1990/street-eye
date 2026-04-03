@@ -1,9 +1,9 @@
 # StreetEye — Техническое задание: Бэкенд MVP
 
-> **Версия:** 1.0 · Март 2026  
+> **Версия:** 1.2 · Апрель 2026  
 > **Стек:** NestJS · PostgreSQL · Redis · Docker Compose  
 > **Срок:** 10 недель  
-> **Связанные docs:** StreetEye MVP Specification v1.0
+> **Связанные docs:** StreetEye MVP Specification v1.1
 
 ---
 
@@ -310,6 +310,32 @@ model Subscription {
 | XSS / clickjacking | Helmet: `Content-Security-Policy`, `X-Frame-Options`, `HSTS` |
 | CORS | Whitelist: только домен мобильного клиента (задаётся через env `ALLOWED_ORIGINS`) |
 
+### 3.5 DTO регистрации с данными онбординга
+
+Регистрация происходит после онбординга. Клиент передаёт данные, собранные на экранах онбординга (язык, уровень, предпочтения), вместе с email и паролем. Это позволяет создать пользователя сразу с заполненным профилем — без дополнительного `PATCH /users/me`.
+
+```typescript
+class RegisterDto {
+  @IsEmail()
+  email: string;
+
+  @IsString() @MinLength(8)
+  password: string;
+
+  @IsOptional() @IsEnum(Level)
+  level?: Level;                  // из онбординга, экран 3. Default: BEGINNER
+
+  @IsOptional() @IsArray() @IsEnum(Category, { each: true })
+  @ArrayMinSize(1) @ArrayMaxSize(2)
+  preferredCategories?: Category[];  // из онбординга, экран 4. Default: [VISUAL]
+
+  @IsOptional() @IsEnum(Locale)
+  locale?: Locale;                // из онбординга, экран 2. Default: EN
+}
+```
+
+При регистрации: если `level`, `preferredCategories` или `locale` не переданы — используются значения по умолчанию из Prisma-схемы (`BEGINNER`, `EN`). Это поддерживает обратную совместимость — регистрация работает и без данных онбординга.
+
 ---
 
 ## 4. UsersModule — профиль пользователя
@@ -331,7 +357,7 @@ class UpdateUserDto {
   level?: Level;
 
   @IsOptional() @IsArray() @IsEnum(Category, { each: true })
-  @ArrayMinSize(1) @ArrayMaxSize(4)
+  @ArrayMinSize(1) @ArrayMaxSize(2)
   preferredCategories?: Category[];
 
   @IsOptional() @IsEnum(Locale)
@@ -366,13 +392,14 @@ class UserProfileDto {
 
 ### 5.1 Эндпоинты
 
-| Метод | Путь | Описание | Параметры |
-|---|---|---|---|
-| GET | `/tasks/random` | Случайное задание для пользователя | Фильтрует по level и categories из профиля. Исключает последние 5 |
-| GET | `/tasks/:id` | Получить задание по ID | Используется для восстановления активной сессии |
-| GET | `/tasks` | Список заданий с фильтрацией | Query: `level`, `category`, `tags`. Пагинация: `page`, `limit` (max 50) |
+| Метод | Путь | Описание | Auth | Параметры |
+|---|---|---|---|---|
+| GET | `/tasks/random` | Случайное задание для авторизованного пользователя | JWT | Фильтрует по level и categories из профиля. Исключает последние 5 |
+| GET | `/tasks/random/guest` | Случайное задание для гостя (онбординг, экран 6) | Публичный | Query: `level`, `categories`, `locale`. Не исключает историю (у гостя её нет) |
+| GET | `/tasks/:id` | Получить задание по ID | JWT | Используется для восстановления активной сессии |
+| GET | `/tasks` | Список заданий с фильтрацией | JWT | Query: `level`, `category`, `tags`. Пагинация: `page`, `limit` (max 50) |
 
-### 5.2 Логика /tasks/random
+### 5.2 Логика /tasks/random (авторизованный)
 
 1. Читает уровень и `preferredCategories` из профиля пользователя
 2. Получает ID последних 5 заданий пользователя из `task_sessions`
@@ -381,12 +408,41 @@ class UserProfileDto {
 5. **Не создаёт сессию.** Возвращает задание без фиксации — пользователь может нажать «Другое задание» несколько раз (Free: 1 раз, Premium: 3 раза за сессию приложения)
 6. Перед отдачей: разрешает локаль из заголовка `Accept-Language` (en | ru, fallback → en). Возвращает `title`, `description`, `tip` уже на нужном языке — клиент не знает о полях `_ru`/`_en` в БД
 
-### 5.3 Response: TaskDto
+### 5.3 Логика /tasks/random/guest (гостевой)
+
+Публичный эндпоинт для выдачи первого задания на экране 6 онбординга — до регистрации.
+
+1. Читает `level`, `categories`, `locale` из query-параметров (обязательные)
+2. Делает запрос к БД: `WHERE level = :level AND category IN (:categories) AND isActive = true ORDER BY RANDOM() LIMIT 1`
+3. Не исключает последние задания (у гостя нет истории сессий)
+4. Не создаёт сессию (гость не может иметь сессию)
+5. Разрешает локаль из query-параметра `locale` (не из `Accept-Language`, т.к. гость выбрал язык в онбординге явно)
+6. Возвращает `TaskDto` — тот же формат, что и для авторизованных
+
+**Валидация query-параметров:**
+
+```typescript
+class GuestRandomTaskQueryDto {
+  @IsEnum(Level)
+  level: Level;
+
+  @IsArray() @IsEnum(Category, { each: true })
+  @ArrayMinSize(1) @ArrayMaxSize(2)
+  categories: Category[];
+
+  @IsEnum(Locale)
+  locale: Locale;
+}
+```
+
+**Rate limit:** 5 запросов / 15 мин на IP — жёстче, чем для авторизованных, чтобы защититься от парсинга без аккаунта.
+
+### 5.4 Response: TaskDto
 
 ```typescript
 class TaskDto {
   id:           string;
-  title:        string;  // уже выбранная локаль по Accept-Language
+  title:        string;  // уже выбранная локаль по Accept-Language или query locale
   description:  string;  // бэкенд разрешает нужный язык до отдачи клиенту
   tip:          string;
   category:     Category;
@@ -729,6 +785,7 @@ class UserProfileDto {
 | `POST /auth/forgot-password` | 3 / 10 мин на IP | Защита от спама email |
 | `POST /auth/resend-verify` | 3 / 10 мин на IP | Защита от спама email |
 | `GET /tasks/random` | 10 / мин на user | Лимит на переключение заданий |
+| `GET /tasks/random/guest` | 5 / 15 мин на IP | Жёсткий лимит для неавторизованных — защита от парсинга |
 | `POST /subscriptions/verify` | 5 / мин на user | Защита от спама верификации |
 | `POST /users/me/push-token` | 5 / мин на user | Защита от спама токенов |
 
@@ -875,9 +932,11 @@ GET /health
 ### 11.2 Обязательное покрытие
 
 - `AuthModule`: регистрация → verify → login → refresh → logout (happy path + все ошибки)
+- `AuthModule`: регистрация с данными онбординга (`level`, `preferredCategories`, `locale` в теле `POST /auth/register`)
 - `AuthModule`: forgot-password → reset-password флоу
 - `AuthModule`: rate limiting (мок throttler)
 - `TasksModule`: логика `/tasks/random` (исключение последних 5, fallback при пустом результате)
+- `TasksModule`: логика `/tasks/random/guest` (валидация query-параметров, rate limit по IP, корректная локаль)
 - `SessionsModule`: создание сессии (`POST /sessions`), переход статусов, запрет двух активных сессий
 - `JournalModule`: вычисление streak (граничные случаи: один день, пропуск, SKIPPED + COMPLETED в один день, длинная серия)
 - `BadgesModule`: каждое условие бейджа отдельно
@@ -946,12 +1005,12 @@ GET /health
 
 ## Итого
 
-Бэкенд StreetEye MVP — 10 модулей, 37 эндпоинтов, полная схема БД из 10 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
+Бэкенд StreetEye MVP — 10 модулей, 38 эндпоинтов, полная схема БД из 10 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
 
 | Параметр | Значение | Комментарий |
 |---|---|---|
 | Модулей | 10 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Notifications, Subscriptions, Health |
-| Эндпоинтов | 37 | Полный API для мобильного клиента, включая push-токены и подписки |
+| Эндпоинтов | 38 | Полный API для мобильного клиента, включая гостевой доступ, push-токены и подписки |
 | Таблиц в БД | 10 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges, PushTokens, Subscriptions |
 | Поддерживаемые языки | 2 | EN (default) + RU. Accept-Language + locale в профиле + env fallback |
 | Платные зависимости | 0 | Resend: 3 000 писем/мес бесплатно — хватит на MVP |
@@ -960,4 +1019,4 @@ GET /health
 
 ---
 
-*StreetEye Backend TZ v1.0 · Март 2026*
+*StreetEye Backend TZ v1.2 · Апрель 2026*

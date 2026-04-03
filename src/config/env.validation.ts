@@ -21,4 +21,9 @@ export const envValidationSchema = Joi.object({
 
   DEFAULT_LOCALE: Joi.string().valid('en', 'ru').default('en'),
   SUPPORTED_LOCALES: Joi.string().default('en,ru'),
+
+  EXPO_ACCESS_TOKEN: Joi.string().optional(),
+
+  APPLE_SHARED_SECRET: Joi.string().optional(),
+  GOOGLE_SERVICE_ACCOUNT_KEY: Joi.string().optional(),
 });
