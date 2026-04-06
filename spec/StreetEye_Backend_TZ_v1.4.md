@@ -1,6 +1,6 @@
 # StreetEye — Техническое задание: Бэкенд MVP
 
-> **Версия:** 1.2 · Апрель 2026  
+> **Версия:** 1.4 · Апрель 2026  
 > **Стек:** NestJS · PostgreSQL · Redis · Docker Compose  
 > **Срок:** 10 недель  
 > **Связанные docs:** StreetEye MVP Specification v1.1
@@ -26,6 +26,7 @@
 | MailModule | Отправка писем через Resend. Шаблоны на ru и en — язык выбирается по полю `locale` пользователя | — |
 | NotificationsModule | Хранение push-токенов, отправка push-уведомлений через Expo Push API | UsersModule |
 | SubscriptionsModule | Верификация покупок (App Store / Google Play), статус подписки, лимиты Free/Premium | UsersModule |
+| PromoModule | Генерация и активация промокодов, выдача lifetime Premium | SubscriptionsModule, UsersModule |
 | HealthModule | Health-check эндпоинт для мониторинга | — |
 
 ### 1.2 Стек технологий
@@ -72,6 +73,7 @@ src/
 ├── mail/                      # MailModule
 ├── notifications/             # NotificationsModule
 ├── subscriptions/             # SubscriptionsModule
+├── promo/                     # PromoModule
 └── health/                    # HealthModule
 ```
 
@@ -246,10 +248,10 @@ model Subscription {
   id              String             @id @default(uuid())
   userId          String
   user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  platform        Platform           // IOS | ANDROID
-  productId       String             // 'streeteye_premium_monthly'
-  transactionId   String             @unique
-  receipt         String             @db.Text
+  platform        Platform?          // IOS | ANDROID | null (для промо)
+  productId       String             // 'streeteye_premium_monthly' | 'promo_lifetime'
+  transactionId   String             @unique  // ID транзакции магазина или 'promo_{promoCodeId}'
+  receipt         String?            @db.Text  // null для промо
   status          SubscriptionStatus @default(ACTIVE) // ACTIVE | EXPIRED | CANCELLED
   expiresAt       DateTime
   createdAt       DateTime           @default(now())
@@ -259,11 +261,27 @@ model Subscription {
 }
 ```
 
+### 2.11 Таблица promo_codes
+
+```prisma
+model PromoCode {
+  id        String    @id @default(uuid())
+  code      String    @unique          // 8 символов, uppercase, A-Z0-9
+  usedById  String?
+  usedBy    User?     @relation(fields: [usedById], references: [id])
+  usedAt    DateTime?
+  expiresAt DateTime                   // срок действия кода (не подписки)
+  createdAt DateTime  @default(now())
+  @@index([code])
+}
+```
+
 **Дополнение к модели User:** к связям User добавляются:
 
 ```prisma
   pushTokens      PushToken[]
   subscriptions   Subscription[]
+  usedPromoCodes  PromoCode[]
 ```
 
 ---
@@ -462,10 +480,12 @@ class TaskDto {
 
 | Метод | Путь | Описание |
 |---|---|---|
-| POST | `/sessions` | Создать сессию для задания. Вызывается при нажатии «Взять это». Тело: `{ taskId }`. Возвращает `sessionId`. Запрещено, если уже есть `ACTIVE` сессия |
+| POST | `/sessions` | Создать сессию для задания. Вызывается при нажатии «Взять это» или автоматически после регистрации гостя для миграции задания из онбординга. Тело: `{ taskId }`. Возвращает `sessionId`. Запрещено, если уже есть `ACTIVE` сессия |
 | GET | `/sessions/active` | Активная сессия пользователя. Возвращает задание + sessionId или 404 |
 | PATCH | `/sessions/:id` | Обновить статус сессии: `COMPLETED` \| `SKIPPED` \| `SAVED_FOR_LATER` |
 | GET | `/sessions` | История сессий. Query: `status`, `limit` (max 50), `cursor` (cursor-based pagination) |
+
+**Сценарий миграции гостевого задания:** после регистрации клиент вызывает `POST /sessions` с `taskId` задания из онбординга, затем сразу `PATCH /sessions/:id` с `status: COMPLETED`. С точки зрения бэкенда это обычные вызовы — специальной логики миграции не требуется. Вся оркестрация на стороне клиента.
 
 ### 6.2 Правила статусов
 
@@ -717,6 +737,99 @@ class UserProfileDto {
 
 ---
 
+## 8c. PromoModule — промокоды
+
+Промокоды — альтернатива подписке через App Store / Google Play. Каждый код одноразовый, даёт lifetime Premium. Создаются через защищённый API-эндпоинт. Отзыв кода в MVP не реализуется.
+
+### 8c.1 Эндпоинты
+
+| Метод | Путь | Описание | Auth |
+|---|---|---|---|
+| POST | `/promo/redeem` | Активировать промокод. Тело: `{ code }` | JWT |
+| POST | `/promo/generate` | Создать N промокодов. Тело: `{ count, expiresAt }` | API-ключ (`X-Admin-Key` header) |
+| GET | `/promo/list` | Список всех промокодов (с фильтрацией по статусу) | API-ключ (`X-Admin-Key` header) |
+
+### 8c.2 Логика активации (`POST /promo/redeem`)
+
+1. Получает `code` из тела запроса. Приводит к uppercase, убирает пробелы
+2. Ищет в БД: `WHERE code = :code AND usedById IS NULL AND expiresAt > NOW()`
+3. Если код не найден → `PROMO_CODE_INVALID` (404)
+4. Если код уже использован → `PROMO_CODE_ALREADY_USED` (409)
+5. Если код истёк → `PROMO_CODE_EXPIRED` (410)
+6. Если у пользователя уже есть активная подписка → `ALREADY_PREMIUM` (409)
+7. В одной транзакции:
+   - Обновляет `promo_codes`: `usedById = userId`, `usedAt = NOW()`
+   - Создаёт запись в `subscriptions`: `productId = 'promo_lifetime'`, `transactionId = 'promo_{promoCodeId}'`, `platform = null`, `receipt = null`, `expiresAt = 2099-12-31`, `status = ACTIVE`
+8. Возвращает `SubscriptionStatusDto` с обновлённым статусом
+
+### 8c.3 Логика генерации (`POST /promo/generate`)
+
+Защищён заголовком `X-Admin-Key` — значение из env `ADMIN_API_KEY`. Без валидного ключа → 401.
+
+```typescript
+class GeneratePromoDto {
+  @IsInt() @Min(1) @Max(100)
+  count: number;               // сколько кодов создать
+
+  @IsDateString()
+  expiresAt: string;           // срок действия кодов (ISO 8601)
+}
+```
+
+Генерация кода:
+
+```typescript
+function generatePromoCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // без 0/O/1/I — исключены для читаемости
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars[crypto.randomInt(chars.length)];
+  }
+  return code; // Пример: 'K7X2NP4G'
+}
+```
+
+Возвращает массив созданных кодов.
+
+### 8c.4 DTO и Response
+
+```typescript
+class RedeemPromoDto {
+  @IsString() @Length(8, 8)
+  code: string;
+}
+
+// Response на POST /promo/redeem — SubscriptionStatusDto (тот же, что в 8b.4)
+
+// Response на POST /promo/generate
+class GeneratePromoResponseDto {
+  codes: string[];     // массив созданных кодов
+  count: number;
+  expiresAt: string;   // ISO 8601
+}
+
+// Response на GET /promo/list
+class PromoCodeDto {
+  id:        string;
+  code:      string;
+  usedBy:    string | null;   // email пользователя или null
+  usedAt:    string | null;
+  expiresAt: string;
+  createdAt: string;
+}
+```
+
+### 8c.5 Коды ошибок
+
+| Код | HTTP | Когда |
+|---|---|---|
+| `PROMO_CODE_INVALID` | 404 | Код не существует |
+| `PROMO_CODE_ALREADY_USED` | 409 | Код уже активирован другим пользователем |
+| `PROMO_CODE_EXPIRED` | 410 | Срок действия кода истёк |
+| `ALREADY_PREMIUM` | 409 | У пользователя уже есть активная подписка |
+
+---
+
 ## 9. Глобальные механизмы
 
 ### 9.1 Формат ответов
@@ -772,6 +885,10 @@ class UserProfileDto {
 | `NOT_FOUND` | 404 | Ресурс не найден |
 | `FORBIDDEN` | 403 | Нет доступа к чужому ресурсу |
 | `ACTIVE_SESSION_EXISTS` | 409 | Уже есть активная сессия задания |
+| `PROMO_CODE_INVALID` | 404 | Промокод не существует |
+| `PROMO_CODE_ALREADY_USED` | 409 | Промокод уже активирован |
+| `PROMO_CODE_EXPIRED` | 410 | Срок действия промокода истёк |
+| `ALREADY_PREMIUM` | 409 | У пользователя уже есть активная подписка |
 | `RATE_LIMIT_EXCEEDED` | 429 | Превышен лимит запросов |
 | `INTERNAL_ERROR` | 500 | Внутренняя ошибка сервера |
 
@@ -788,6 +905,8 @@ class UserProfileDto {
 | `GET /tasks/random/guest` | 5 / 15 мин на IP | Жёсткий лимит для неавторизованных — защита от парсинга |
 | `POST /subscriptions/verify` | 5 / мин на user | Защита от спама верификации |
 | `POST /users/me/push-token` | 5 / мин на user | Защита от спама токенов |
+| `POST /promo/redeem` | 5 / 15 мин на user | Защита от перебора промокодов |
+| `POST /promo/generate` | 10 / мин на IP | Защита генерации (доступ по API-ключу) |
 
 ### 9.4 Переменные окружения
 
@@ -826,6 +945,9 @@ EXPO_ACCESS_TOKEN=<токен для Expo Push API>
 # In-App Purchases
 APPLE_SHARED_SECRET=<shared secret для верификации App Store receipts>
 GOOGLE_SERVICE_ACCOUNT_KEY=<путь к JSON-ключу сервисного аккаунта Google Play>
+
+# Промокоды (админский доступ)
+ADMIN_API_KEY=<случайная строка 64+ символа для заголовка X-Admin-Key>
 ```
 
 ### 9.5 Конфигурация ConfigModule
@@ -942,6 +1064,7 @@ GET /health
 - `BadgesModule`: каждое условие бейджа отдельно
 - `SubscriptionsModule`: верификация покупки, проверка статуса, истечение подписки
 - `NotificationsModule`: сохранение/удаление push-токена, формирование уведомления по локали
+- `PromoModule`: генерация кодов (уникальность, формат), активация (happy path, уже использован, истёк, уже Premium), защита API-ключом
 
 ### 11.3 Тестовая БД
 
@@ -961,7 +1084,7 @@ GET /health
 | 5–6 | TasksModule | Модель Task с полями `_ru`/`_en`, seed-скрипт (30 заданий, JSON с ru + en контентом); SessionsModule: `POST /sessions` для создания сессии, статусы, активная сессия; `GET /tasks/random` с логикой исключений и разрешением локали по Accept-Language; Тесты логики randomizer | Мобильное приложение может получать задания |
 | 7 | JournalModule | CRUD записей дневника; `GET /journal/stats` со streak-логикой; Redis кэш для stats (5 мин); Тесты граничных случаев streak | Дневник полностью работает |
 | 8 | BadgesModule + NotificationsModule | 4 бейджа, checkAndAward логика; Seed бейджей в БД; Push-токены (`POST /users/me/push-token`); Cron-задачи напоминаний и streak-уведомлений; Тесты условий бейджей | Бейджи и push-уведомления работают |
-| 9 | SubscriptionsModule | Верификация покупок App Store / Google Play; `GET /subscriptions/status`; Лимиты Free/Premium; `isPremium` в `UserProfileDto`; Тесты верификации и лимитов | Монетизация на бэкенде готова |
+| 9 | SubscriptionsModule + PromoModule | Верификация покупок App Store / Google Play; `GET /subscriptions/status`; Лимиты Free/Premium; `isPremium` в `UserProfileDto`; Таблица `promo_codes`, генерация и активация промокодов, `POST /promo/redeem`, `POST /promo/generate` с API-ключом; Тесты верификации, лимитов и промокодов | Монетизация и промокоды на бэкенде готовы |
 | 10 | Полировка | E2E тесты всех критических флоу; GitHub Actions CI/CD пайплайн; Деплой на VPS, prod Docker Compose; Нагрузочный тест (Artillery): 100 rps; Документация API (Swagger через @nestjs/swagger) | Бэкенд готов к публичному запуску |
 
 ---
@@ -1005,13 +1128,13 @@ GET /health
 
 ## Итого
 
-Бэкенд StreetEye MVP — 10 модулей, 38 эндпоинтов, полная схема БД из 10 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
+Бэкенд StreetEye MVP — 11 модулей, 41 эндпоинт, полная схема БД из 11 таблиц. Без внешних платных зависимостей: авторизация самописная, email через бесплатный tier Resend, инфраструктура на VPS от $5/месяц.
 
 | Параметр | Значение | Комментарий |
 |---|---|---|
-| Модулей | 10 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Notifications, Subscriptions, Health |
-| Эндпоинтов | 38 | Полный API для мобильного клиента, включая гостевой доступ, push-токены и подписки |
-| Таблиц в БД | 10 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges, PushTokens, Subscriptions |
+| Модулей | 11 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Notifications, Subscriptions, Promo, Health |
+| Эндпоинтов | 41 | Полный API для мобильного клиента, включая гостевой доступ, push-токены, подписки и промокоды |
+| Таблиц в БД | 11 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges, PushTokens, Subscriptions, PromoCodes |
 | Поддерживаемые языки | 2 | EN (default) + RU. Accept-Language + locale в профиле + env fallback |
 | Платные зависимости | 0 | Resend: 3 000 писем/мес бесплатно — хватит на MVP |
 | Срок разработки | 10 недель | 1 backend-разработчик, параллельно с мобилкой |
@@ -1019,4 +1142,4 @@ GET /health
 
 ---
 
-*StreetEye Backend TZ v1.2 · Апрель 2026*
+*StreetEye Backend TZ v1.4 · Апрель 2026*

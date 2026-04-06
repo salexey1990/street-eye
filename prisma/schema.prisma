@@ -76,6 +76,7 @@ model User {
   userBadges     UserBadge[]
   pushTokens     PushToken[]
   subscriptions  Subscription[]
+  usedPromoCodes PromoCode[]
 
   @@map("users")
 }
@@ -199,10 +200,10 @@ model Subscription {
   id            String             @id @default(uuid())
   userId        String
   user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  platform      Platform
+  platform      Platform?
   productId     String
   transactionId String             @unique
-  receipt       String             @db.Text
+  receipt       String?            @db.Text
   status        SubscriptionStatus @default(ACTIVE)
   expiresAt     DateTime
   createdAt     DateTime           @default(now())
@@ -211,4 +212,17 @@ model Subscription {
   @@index([userId])
   @@index([userId, status])
   @@map("subscriptions")
+}
+
+model PromoCode {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  usedById  String?
+  usedBy    User?     @relation(fields: [usedById], references: [id])
+  usedAt    DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([code])
+  @@map("promo_codes")
 }

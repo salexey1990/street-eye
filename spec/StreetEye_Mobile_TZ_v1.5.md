@@ -1,10 +1,10 @@
 # StreetEye — Техническое задание: Мобильное приложение MVP
 
-> **Версия:** 1.2 · Апрель 2026
+> **Версия:** 1.5 · Апрель 2026
 > **Платформы:** iOS 16+, Android 13+
 > **Фреймворк:** React Native + Expo SDK 51
 > **Срок разработки:** 10 недель
-> **Связанные docs:** StreetEye MVP Specification v1.2, StreetEye Backend TZ v1.2
+> **Связанные docs:** StreetEye MVP Specification v1.4, StreetEye Backend TZ v1.4
 
 ---
 
@@ -63,6 +63,7 @@ app/
 
 components/
 ├── ui/                    # переиспользуемые компоненты
+├── auth/                  # RegisterSheet (bottom sheet быстрой регистрации)
 ├── task/                  # компоненты карточки задания
 ├── journal/               # компоненты дневника
 └── onboarding/            # компоненты онбординга
@@ -265,7 +266,7 @@ async function getInitialRoute(): Promise<string> {
 - Видеть историю
 - Нажать «Другое задание» (доступно только авторизованным)
 
-При попытке сохранить → показать bottom sheet с предложением зарегистрироваться.
+При попытке сохранить → открывается `RegisterSheet` (раздел 3.6) — упрощённая форма регистрации поверх текущего экрана.
 
 ### 2.4 Хранение данных онбординга до регистрации
 
@@ -287,23 +288,46 @@ await AsyncStorage.setItem('onboarding_data', JSON.stringify({
 }));
 ```
 
-При регистрации данные онбординга передаются в тело `POST /auth/register`:
+**Ключи AsyncStorage для гостевого режима:**
+
+| Ключ | Тип | Описание | Когда очищается |
+|---|---|---|---|
+| `onboarding_data` | JSON | Язык, уровень, категории | После успешной регистрации |
+| `onboarding_complete` | `'true'` | Флаг завершения онбординга | Никогда (пользователь не проходит онбординг повторно) |
+| `guest_active_task` | JSON (TaskDto) | Задание, полученное на экране 6 | После создания серверной сессии при регистрации |
+
+При регистрации данные онбординга передаются в тело `POST /auth/register`, а гостевое задание превращается в серверную сессию:
 
 ```typescript
-async function register(email: string, password: string): Promise<void> {
+async function registerAndMigrateGuestTask(email: string, password: string): Promise<string | null> {
+  // 1. Регистрация с данными онбординга
   const raw = await AsyncStorage.getItem('onboarding_data');
   const onboarding = raw ? JSON.parse(raw) : {};
 
-  const response = await api.post('/auth/register', {
+  await api.post('/auth/register', {
     email,
     password,
-    level: onboarding.level,                    // из экрана 3
-    preferredCategories: onboarding.preferredCategories, // из экрана 4
-    locale: onboarding.locale,                  // из экрана 2
+    level: onboarding.level,
+    preferredCategories: onboarding.preferredCategories,
+    locale: onboarding.locale,
   });
 
-  // Аккаунт создаётся сразу с заполненным профилем
-  // Дополнительный PATCH /users/me не нужен
+  // 2. Подтверждение email и вход (пользователь переходит по ссылке из письма)
+  // ... после верификации и логина:
+
+  // 3. Создать серверную сессию для гостевого задания (если есть)
+  const taskRaw = await AsyncStorage.getItem('guest_active_task');
+  if (taskRaw) {
+    const task = JSON.parse(taskRaw);
+    const sessionRes = await api.post('/sessions', { taskId: task.id });
+    await AsyncStorage.removeItem('guest_active_task');
+    return sessionRes.data.data.id; // sessionId
+  }
+
+  // 4. Очистить данные онбординга
+  await AsyncStorage.removeItem('onboarding_data');
+
+  return null;
 }
 ```
 
@@ -396,9 +420,75 @@ api.interceptors.response.use(
 );
 ```
 
----
+### 3.6 Bottom sheet быстрой регистрации — `components/auth/RegisterSheet.tsx`
 
-## 4. Онбординг
+Упрощённая форма регистрации, которая появляется поверх главного экрана, когда гость пытается сохранить результат (нажимает «Задание выполнено» или «Сохранить на потом»). Пользователь не покидает контекст задания — это повышает конверсию по сравнению с навигацией на полноэкранный экран регистрации.
+
+**Отличие от полноэкранной регистрации (`(auth)/register.tsx`):**
+
+| | Полноэкранная | Bottom sheet |
+|---|---|---|
+| Контекст | Отдельный экран, навигация | Поверх главного экрана, не теряет контекст |
+| Поля | Email, пароль, повтор пароля, чекбокс | Email, пароль (минимум) |
+| Когда появляется | Пользователь сам переходит | Автоматически при действии гостя |
+| После успеха | Экран подтверждения email | Закрывается, продолжает прерванное действие |
+
+**Содержимое bottom sheet:**
+
+- Заголовок: «Зарегистрируйтесь, чтобы сохранить результат» (`displaySm`, цвет `text`)
+- Подзаголовок: «Это займёт 10 секунд» (`bodySmall`, цвет `textSecondary`)
+- Поле Email — `TextInput`, `keyboardType="email-address"`, `autoCapitalize="none"`
+- Поле Пароль — `TextInput`, `secureTextEntry`, иконка глаза справа
+- Текст под полями: «Регистрируясь, вы принимаете условия использования и политику конфиденциальности» (`bodySmall`, цвет `textMuted`, ссылки — цвет `accent`)
+- Кнопка «Создать аккаунт» (primary, полная ширина)
+- Ссылка «Уже есть аккаунт? Войти» — открывает полноэкранный `(auth)/login.tsx`
+
+**Клиентская валидация:**
+- Email — `/.+@.+\..+/`
+- Пароль — длина ≥ 8
+- Кнопка неактивна, пока оба поля не валидны
+
+**Состояния кнопки:** обычная → загрузка (spinner) → ошибка (встряска + сообщение) → успех (закрытие sheet).
+
+**Обработка ошибок:**
+
+| Код от API | Сообщение |
+|---|---|
+| `VALIDATION_ERROR` | Показать под конкретным полем |
+| `RATE_LIMIT_EXCEEDED` | «Слишком много попыток. Подождите» |
+| Нет сети | «Нет подключения к интернету» |
+| Email уже занят | «Этот email уже зарегистрирован. Войти?» (ссылка на login) |
+
+**Логика после успешной регистрации:**
+
+```typescript
+// components/auth/RegisterSheet.tsx
+async function onRegisterSuccess(): Promise<void> {
+  // 1. Отправить POST /auth/register с данными онбординга
+  const raw = await AsyncStorage.getItem('onboarding_data');
+  const onboarding = raw ? JSON.parse(raw) : {};
+
+  await api.post('/auth/register', {
+    email,
+    password,
+    level: onboarding.level,
+    preferredCategories: onboarding.preferredCategories,
+    locale: onboarding.locale,
+  });
+
+  // 2. Показать сообщение «Проверьте почту» внутри bottom sheet
+  //    Пользователь переходит по ссылке из письма → приложение ловит диплинк
+  //    → автоматический вход → продолжение прерванного действия
+
+  // 3. После верификации и логина — вызвать callback:
+  //    onComplete(email, password) — родительский компонент
+  //    выполняет миграцию гостевого задания (см. раздел 5.4)
+}
+```
+
+**Важно:** bottom sheet не закрывается при тапе вне его области (чтобы пользователь не потерял введённые данные). Закрытие — только кнопкой «×» в правом верхнем углу или свайпом вниз с подтверждением.
+
+---
 
 Онбординг — линейная последовательность из 6 экранов. Прогресс сохраняется в AsyncStorage после каждого шага. Если пользователь закрыл приложение на шаге 3 — возобновляет с шага 3.
 
@@ -440,13 +530,20 @@ async function fetchFirstTask(): Promise<Task> {
       locale,
     },
   });
-  return response.data.data;
+  const task = response.data.data;
+
+  // Сохраняем задание и его ID для использования после регистрации
+  await AsyncStorage.setItem('guest_active_task', JSON.stringify(task));
+
+  return task;
 }
 ```
 
-Кнопка «Пошёл снимать» → переход на главный экран `/(tabs)`. Сессия на сервере **не создаётся** (гость не может иметь сессию). Задание сохраняется локально в AsyncStorage для отображения на главном экране.
-
-AsyncStorage: `onboarding_complete = true`.
+Кнопка «Пошёл снимать»:
+1. `onboarding_complete = true` в AsyncStorage
+2. Переход на главный экран `/(tabs)`
+3. Главный экран читает задание из `guest_active_task` и отображает в состоянии A (активное задание)
+4. Серверная сессия **не создаётся** — гость не авторизован
 
 ---
 
@@ -523,11 +620,53 @@ async function acceptTask(taskId: string): Promise<string> {
 
 ### 5.4 Завершение задания
 
+**Авторизованный пользователь:**
+
 Кнопка «Задание выполнено»:
 1. `PATCH /sessions/:id` с `{ status: 'COMPLETED' }`
 2. Анимация подтверждения (краткая, 0.5с)
 3. Открывается bottom sheet для записи в дневник
 4. После закрытия bottom sheet — экран переходит в состояние B
+
+**Гость (не авторизован):**
+
+Кнопка «Задание выполнено»:
+1. Открывается `RegisterSheet` (см. раздел 3.6) — упрощённая форма регистрации поверх текущего экрана
+2. Пользователь вводит email и пароль → `POST /auth/register` с данными онбординга из AsyncStorage
+3. Пользователь подтверждает email по ссылке из письма → автоматический вход
+4. После успешного входа клиент автоматически выполняет цепочку:
+   - `POST /sessions` с `taskId` из `guest_active_task` → создаёт серверную сессию
+   - `PATCH /sessions/:id` с `{ status: 'COMPLETED' }` → завершает сессию
+   - Очищает `guest_active_task` из AsyncStorage
+5. Открывается bottom sheet для записи в дневник — стандартный флоу
+
+Весь процесс прозрачен: между нажатием «Задание выполнено» и формой дневника пользователь только вводит email, пароль и переходит по ссылке из письма.
+
+```typescript
+async function completeTaskAsGuest(taskId: string): Promise<void> {
+  // 1. Показать bottom sheet регистрации и дождаться успеха
+  const registered = await showRegistrationSheet();
+  if (!registered) return; // пользователь отменил
+
+  // 2. Создать серверную сессию для задания из онбординга
+  const sessionRes = await api.post('/sessions', { taskId });
+  const sessionId = sessionRes.data.data.id;
+
+  // 3. Завершить сессию
+  await api.patch(`/sessions/${sessionId}`, { status: 'COMPLETED' });
+
+  // 4. Очистить гостевое задание
+  await AsyncStorage.removeItem('guest_active_task');
+
+  // 5. Сохранить сессию локально
+  await db.saveActiveSession(sessionId, taskId);
+
+  // 6. Открыть bottom sheet дневника
+  showJournalEntrySheet(sessionId);
+}
+```
+
+**Обработка ошибок в цепочке:** если после регистрации `POST /sessions` или `PATCH /sessions/:id` завершается ошибкой — показать сообщение «Не удалось сохранить задание. Попробуйте ещё раз» и предложить кнопку повтора. Регистрация при этом уже завершена, данные не теряются.
 
 Кнопка «Сохранить на потом»:
 1. `PATCH /sessions/:id` с `{ status: 'SAVED_FOR_LATER' }`
@@ -627,6 +766,7 @@ CREATE TABLE journal_entries (
 - Email
 - Кнопка «Изменить пароль»
 - Кнопка «Управление подпиской» (если Premium)
+- Кнопка «Активировать промокод» (если не Premium) → открывает bottom sheet с полем ввода кода
 - Кнопка «Выйти»
 - Кнопка «Удалить аккаунт» (деструктивная, внизу, мелко)
 
@@ -648,6 +788,7 @@ CREATE TABLE journal_entries (
 - Кнопка «Попробовать бесплатно»
 - Мелко: «Отменить можно в любой момент»
 - Кнопка «Восстановить покупку»
+- Ссылка «Есть промокод?» → раскрывает поле ввода кода + кнопка «Активировать»
 
 ### 8.2 In-App Purchase
 
@@ -685,6 +826,61 @@ IAP.setPurchaseListener(({ responseCode, results }) => {
 Лимиты, которые проверяются локально (без запроса к серверу):
 - Счётчик заданий в месяце — хранится в AsyncStorage, сбрасывается 1-го числа
 - Количество нажатий «Другое задание» за сессию — хранится в памяти (store)
+
+### 8.4 Активация промокода
+
+Промокод — альтернативный путь к Premium, минуя покупку через App Store / Google Play. Даёт lifetime Premium.
+
+**Точки входа:**
+- Paywall: ссылка «Есть промокод?» → раскрывает поле ввода
+- Профиль → «Активировать промокод» (виден только не-Premium пользователям)
+
+**Компонент: PromoCodeInput (bottom sheet)**
+
+```typescript
+function PromoCodeInput({ onSuccess }: { onSuccess: () => void }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function redeem() {
+    setLoading(true);
+    setError(null);
+    try {
+      await api.post('/promo/redeem', { code: code.toUpperCase().trim() });
+      // Обновить статус подписки в store
+      const profile = await api.get('/users/me');
+      useAuthStore.getState().setProfile(profile.data.data);
+      onSuccess();
+    } catch (err) {
+      const errorCode = err.response?.data?.error?.code;
+      setError(t(`promo.errors.${errorCode}`));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    // TextInput: 8 символов, uppercase, autoCapitalize="characters"
+    // Кнопка «Активировать»: disabled пока code.length < 8
+    // Сообщение об ошибке под полем ввода
+  );
+}
+```
+
+**Обработка ошибок:**
+
+| Код от API | Сообщение пользователю |
+|---|---|
+| `PROMO_CODE_INVALID` | «Промокод не найден» |
+| `PROMO_CODE_ALREADY_USED` | «Этот промокод уже использован» |
+| `PROMO_CODE_EXPIRED` | «Срок действия промокода истёк» |
+| `ALREADY_PREMIUM` | «У вас уже есть Premium-подписка» |
+
+**После успешной активации:**
+1. Закрыть bottom sheet / paywall
+2. Показать краткую анимацию подтверждения (checkmark, 0.5с)
+3. Обновить `isPremium` в Zustand → все лимиты снимаются мгновенно
 
 ---
 
@@ -734,6 +930,19 @@ lib/i18n/locales/en.json
       "failed": "Не получилось",
       "partial": "Частично",
       "success": "Получилось"
+    }
+  },
+  "promo": {
+    "title": "Промокод",
+    "placeholder": "Введите код",
+    "submit": "Активировать",
+    "hasCode": "Есть промокод?",
+    "success": "Premium активирован!",
+    "errors": {
+      "PROMO_CODE_INVALID": "Промокод не найден",
+      "PROMO_CODE_ALREADY_USED": "Этот промокод уже использован",
+      "PROMO_CODE_EXPIRED": "Срок действия промокода истёк",
+      "ALREADY_PREMIUM": "У вас уже есть Premium-подписка"
     }
   }
 }
@@ -870,16 +1079,17 @@ async function syncPendingJournalEntries(): Promise<void> {
 
 - `auth.store`: логин, логаут, refresh, guest mode, регистрация с данными онбординга
 - `task.store`: счётчик «Другое задание», лимит Free, логика `SAVED_FOR_LATER`, переключение гостевой/авторизованный эндпоинт
-- `onboarding`: сохранение/чтение `onboarding_data` из AsyncStorage, передача данных при регистрации
+- `onboarding`: сохранение/чтение `onboarding_data` и `guest_active_task` из AsyncStorage, передача данных при регистрации, миграция гостевого задания в серверную сессию, очистка AsyncStorage после миграции
 - `journal/sync`: оффлайн-запись + синхронизация при восстановлении сети
 - `i18n`: смена языка, корректность ключей в обоих локалях
 - `iap`: проверка статуса подписки, лимиты
+- `promo`: активация промокода (успех, ошибки), обновление isPremium в store, форматирование ввода (uppercase, trim)
 
 ### 12.3 E2E-сценарии (Maestro)
 
 ```yaml
 # flows/onboarding-guest.yaml
-# Гостевой флоу: онбординг → первое задание без регистрации
+# Гостевой флоу: онбординг → первое задание → главный экран с активным заданием
 - launchApp
 - assertVisible: "StreetEye"
 - tapOn: "Начать"
@@ -889,12 +1099,12 @@ async function syncPendingJournalEntries(): Promise<void> {
 - tapOn: "Позже"   # уведомления
 - assertVisible: "Задание"  # первое задание загружено через /tasks/random/guest
 - tapOn: "Пошёл снимать"
-- assertVisible: "Получить задание"  # главный экран, состояние B
+- assertVisible: "Задание выполнено"  # главный экран, состояние A (активное задание)
 ```
 
 ```yaml
-# flows/guest-to-register.yaml
-# Гость пытается сохранить → регистрация → профиль заполнен данными онбординга
+# flows/guest-complete-and-register.yaml
+# Полный флоу: гость завершает задание → регистрация → сессия создаётся → дневник
 - tapOn: "Задание выполнено"
 - assertVisible: "Зарегистрируйтесь"  # bottom sheet с предложением
 - tapOn: "Зарегистрироваться"
@@ -909,11 +1119,16 @@ async function syncPendingJournalEntries(): Promise<void> {
     text: "12345678"
 - tapOn: "Создать аккаунт"
 - assertVisible: "Письмо отправлено"  # экран подтверждения email
+# После верификации email и логина:
+- assertVisible: "Самооценка"  # bottom sheet дневника открывается автоматически
+- tapOn: "Получилось"
+- tapOn: "Сохранить"
+- assertVisible: "Дневник"  # запись создана
 ```
 
 ```yaml
 # flows/complete-task.yaml
-# Авторизованный пользователь завершает задание
+# Авторизованный пользователь завершает задание (стандартный флоу)
 - tapOn: "Задание выполнено"
 - assertVisible: "Самооценка"
 - tapOn: "Получилось"
@@ -1005,12 +1220,12 @@ FIREBASE_APP_ID=...
 
 | Неделя | Модуль | Задачи | Результат |
 |---|---|---|---|
-| 1–2 | Фундамент | Expo проект, навигация (Expo Router), дизайн-система (`theme.ts` по токенам из Pencil-дизайна), API-клиент с interceptors, авторизация (login/register с данными онбординга/токены), SecureStore | Авторизация работает |
+| 1–2 | Фундамент | Expo проект, навигация (Expo Router), дизайн-система (`theme.ts` по токенам из Pencil-дизайна), API-клиент с interceptors, авторизация (login/register с данными онбординга/токены), `RegisterSheet` (bottom sheet быстрой регистрации), SecureStore | Авторизация работает |
 | 3–4 | Онбординг | 6 экранов онбординга, i18n setup (ru + en), expo-localization, смена языка, хранение данных онбординга в AsyncStorage, гостевой запрос задания (`GET /tasks/random/guest`), режим гостя, guard для защищённых экранов | Полный онбординг с локализацией и гостевым режимом |
-| 5–6 | Задание | Главный экран (3 состояния), `GET /tasks/random` (авторизованный) + fallback на `/tasks/random/guest` (гость), `POST /sessions` при «Взять это», карточка задания, таймер, «Другое задание», «Сохранить на потом», завершение задания, bottom sheet регистрации для гостя | Рандомайзер работает end-to-end |
+| 5–6 | Задание | Главный экран (3 состояния), `GET /tasks/random` (авторизованный) + fallback на `/tasks/random/guest` (гость), `POST /sessions` при «Взять это», карточка задания, таймер, «Другое задание», «Сохранить на потом», завершение задания, интеграция `RegisterSheet` для гостевого флоу с миграцией задания | Рандомайзер работает end-to-end |
 | 7 | Дневник | SQLite-схема, создание записи (bottom sheet), список записей, просмотр/редактирование, image picker, оффлайн-синхронизация | Дневник работает локально и онлайн |
 | 8 | Профиль + бейджи | Экран профиля, статистика, 4 бейджа, смена уровня/категорий, push-уведомления, streak-уведомление | Полный профиль |
-| 9 | Монетизация | IAP setup (iOS + Android), paywall экран, лимиты Free, проверка подписки, восстановление покупки | Монетизация работает |
+| 9 | Монетизация | IAP setup (iOS + Android), paywall экран со ссылкой «Есть промокод?», лимиты Free, проверка подписки, восстановление покупки, PromoCodeInput bottom sheet, активация промокода (`POST /promo/redeem`), обработка ошибок промокода | Монетизация и промокоды работают |
 | 10 | Полировка | Оффлайн-индикатор, анимации (Reanimated), crashlytics, E2E тесты (Maestro), TestFlight + внутренний трек Android, финальный EAS build | Готово к публикации |
 
 ---
@@ -1029,4 +1244,4 @@ FIREBASE_APP_ID=...
 
 ---
 
-*StreetEye Mobile TZ v1.2 · Апрель 2026*
+*StreetEye Mobile TZ v1.5 · Апрель 2026*

@@ -26,4 +26,6 @@ export const envValidationSchema = Joi.object({
 
   APPLE_SHARED_SECRET: Joi.string().optional(),
   GOOGLE_SERVICE_ACCOUNT_KEY: Joi.string().optional(),
+
+  ADMIN_API_KEY: Joi.string().min(32).optional(),
 });

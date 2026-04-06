@@ -2,10 +2,14 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import * as qs from 'qs';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Parse bracket-notation arrays (e.g. categories[]=VISUAL) as plain arrays
+  app.getHttpAdapter().getInstance().set('query parser', (str: string) => qs.parse(str, { allowDots: false }));
 
   app.use(
     helmet({
@@ -18,7 +22,7 @@ async function bootstrap() {
   app.enableCors({
     origin: allowedOrigins,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept-Language'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept-Language', 'X-Admin-Key'],
     credentials: true,
   });
 
@@ -39,7 +43,7 @@ async function bootstrap() {
         '**Localisation:** Pass `Accept-Language: ru` or `Accept-Language: en` to get localised content (default: `en`).\n\n' +
         '**Response format:** All responses are wrapped: `{ success, data, meta: { timestamp } }`.',
       )
-      .setVersion('1.2')
+      .setVersion('1.4')
       .addBearerAuth(
         { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', in: 'header' },
         'access-token',
@@ -50,6 +54,7 @@ async function bootstrap() {
       .addTag('sessions', 'Active session management and history')
       .addTag('notifications', 'Expo push token registration and removal')
       .addTag('subscriptions', 'In-app purchase verification and Free/Premium status')
+      .addTag('promo', 'Promo code generation, redemption, and management')
       .addTag('health', 'Service health check')
       .build();
 
