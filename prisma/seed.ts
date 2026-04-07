@@ -5,17 +5,26 @@ import * as path from 'path';
 const prisma = new PrismaClient();
 
 async function main() {
-  const existingCount = await prisma.task.count();
-  if (existingCount > 0) {
-    console.log(`Tasks table already has ${existingCount} records, skipping seed.`);
-    return;
+  // Seed tasks
+  const existingTaskCount = await prisma.task.count();
+  if (existingTaskCount === 0) {
+    const tasks = JSON.parse(fs.readFileSync(path.join(__dirname, 'tasks.seed.json'), 'utf-8'));
+    const result = await prisma.task.createMany({ data: tasks });
+    console.log(`Seeded ${result.count} tasks.`);
+  } else {
+    console.log(`Tasks table already has ${existingTaskCount} records, skipping.`);
   }
 
-  const tasksPath = path.join(__dirname, 'tasks.seed.json');
-  const tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf-8'));
-
-  const result = await prisma.task.createMany({ data: tasks });
-  console.log(`Seeded ${result.count} tasks.`);
+  // Seed badges (upsert — safe to run multiple times)
+  const badges = JSON.parse(fs.readFileSync(path.join(__dirname, 'badges.seed.json'), 'utf-8'));
+  for (const badge of badges) {
+    await prisma.badge.upsert({
+      where: { key: badge.key },
+      update: { name: badge.name, description: badge.description },
+      create: badge,
+    });
+  }
+  console.log(`Seeded ${badges.length} badges.`);
 }
 
 main()

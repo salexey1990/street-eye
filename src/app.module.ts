@@ -15,6 +15,8 @@ import { SessionsModule } from './sessions/sessions.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { PromoModule } from './promo/promo.module';
+import { JournalModule } from './journal/journal.module';
+import { BadgesModule } from './badges/badges.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LocaleInterceptor } from './common/interceptors/locale.interceptor';
@@ -40,6 +42,8 @@ import { LoggingMiddleware } from './common/middleware/logging.middleware';
     NotificationsModule,
     SubscriptionsModule,
     PromoModule,
+    JournalModule,
+    BadgesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

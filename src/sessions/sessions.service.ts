@@ -5,9 +5,11 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Inject, forwardRef } from '@nestjs/common';
 import { SessionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TasksService } from '../tasks/tasks.service';
+import { BadgesService } from '../badges/badges.service';
 import { CreateSessionDto } from './dto/create-session.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
 import { SessionsQueryDto } from './dto/sessions-query.dto';
@@ -19,6 +21,8 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tasksService: TasksService,
+    @Inject(forwardRef(() => BadgesService))
+    private readonly badgesService: BadgesService,
   ) {}
 
   async create(userId: string, dto: CreateSessionDto) {
@@ -93,6 +97,10 @@ export class SessionsService {
       where: { id },
       data,
     });
+
+    if (dto.status === 'COMPLETED') {
+      void this.badgesService.checkAndAward(userId);
+    }
 
     return {
       id: updated.id,

@@ -1,0 +1,22 @@
+[
+  {
+    "key": "FIRST_STEP",
+    "name": "First Step",
+    "description": "Complete your first assignment"
+  },
+  {
+    "key": "WEEK",
+    "name": "Week",
+    "description": "Complete 7 assignments in any period"
+  },
+  {
+    "key": "STREAK_3",
+    "name": "Streak x3",
+    "description": "Complete assignments 3 days in a row"
+  },
+  {
+    "key": "ALL_CATEGORIES",
+    "name": "All Categories",
+    "description": "Complete at least one assignment in each category"
+  }
+]

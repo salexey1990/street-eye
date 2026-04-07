@@ -9,6 +9,7 @@ import { SessionStatus } from '@prisma/client';
 import { SessionsService } from './sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TasksService } from '../tasks/tasks.service';
+import { BadgesService } from '../badges/badges.service';
 
 const mockTask = {
   id: 'task-1',
@@ -51,6 +52,10 @@ const mockPrisma = {
   },
 };
 
+const mockBadgesService = {
+  checkAndAward: jest.fn().mockResolvedValue(undefined),
+};
+
 const mockTasksService = {
   toDto: jest.fn().mockImplementation((task, locale) => ({
     id: task.id,
@@ -73,6 +78,7 @@ describe('SessionsService', () => {
         SessionsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: TasksService, useValue: mockTasksService },
+        { provide: BadgesService, useValue: mockBadgesService },
       ],
     }).compile();
 

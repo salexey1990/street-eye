@@ -28,9 +28,46 @@ const mockPrisma = {
   },
 };
 
+// RSA private key (PKCS#8, 2048-bit) generated for tests only
+const TEST_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCojVf0ZMufBUfy
+Dl63oCPSV5xLnHamkgiNZxlpOfR+F4kfJ0WLUbPq9+b/lI7qtWHmeEazaG2E/KgD
+kWRUct2M+/Lmi9NMQUGWsQxTqDgEkFBRUZiQBJd8+wOQeP3s7gQeAZec4POwZiYa
+pinsPPJJY3NGs90PXWXfHF9Hwdx6PnbKHN7KYfLMBvCyApuB9u4U68KWhFxALU9J
+r7HPVBepRJAHVgfkj84p6euFKyHQiYd0jfkCvG+mvCFnffAedC27g0tR0SHehSzx
+65hjUY+cJMYWKcCywW8MjLxO5sdtzoPTBdzIbLfJrsnFQ16BAregzaHm+ezgXUHI
+1cAdgCEdAgMBAAECggEAI+8eVUg38QsbL4vIvbUybeGnvKb61MBFeoAEdt6YNVmn
+LjEdLnqYtPttEAgIABnzaUMzL4SP9M44s6oHjcl/WlNMkcI1pggzh4Dvc9ZlOvPZ
+a7zNncac1VReiiqBWEXWMt98B0IeMflVHlFWlrrXnLXLGcO22VO8KDjQR2gZLSZT
+WUr/qTg2Jx6oMEEdKr82oQrJr+U85ttL008z2h3Bfzqwmwl7Jg4P8qKQIMMPleVP
+KSpxaMAGIWOruMPJrSfpiHf7lcj467PJSAAHZdRSO2cdavJekruC5LIORLIOlvbO
+P++SYm4/Eev6I39FCT60jG8dbwe9g1GJhy0GHQUlsQKBgQDZxUHpB66t0rU/mPKH
+Vy6tCsF7Ppnr17sQ04o7KhEBGkSrdvJa0nsWbMyL5OcqHQI8F73y/cZnK3onsY/g
+rvQ6a1RQzZgTWdiINWsZM4hcnSCJjuCAndBaBbqtI0MpKMmv8NuNKAijnGkfi5Id
+qNDVCGaJlej9eCfUeLOxh9fQTwKBgQDGJC4gQ7En0SRD1+J3ehMOr2gogz/hRaFR
+6KRqh1Scg31eC9gFBsWszkqwZ0Lco9QCUif/N973rBvYNZvucCFbmNveDDzkN8fj
+n2HMsV3nAASWfXggsZiqUD06NtixYSLtaUcSPx/RoIAmGBmbkUFjv0CVdKnOlzRi
+rEjNr52Q0wKBgFj/C0uPjyyMYvQFrn/u+i1PqviSAddnR5S9zs0VCPP5ZzznlG3X
+fOQSPJmjR3Fnf4VNcpw+Z/m7w+U65IC/HyJMwJ1xGAg4fIxVwFoBPGYU9LoiwM7v
+L7nKg5rEQWsttxcHCMKsLLOodTGmGWWzmvykvTrXH+uOUkC7vzv7NxBzAoGBAJew
+Aw/4Qpt05Qp7L4jAD+7iIh9Bu5m+MK4AKD7Vs9TOZR+meY3/jT2qAEvkAa/gS+Iq
++yvLngqF3Bs9j06O0TrKXygyvjsI6SI9ViXac0TxIpIDJAADdhiMrRLwAhxpfM+8
+FQjHApj9Ap4nPRN3tFOkitDgK09ZOmV/94xfsYS5AoGAWUJDMTySdta2OGbjH0V2
+5mwa3p9N1yDQha7egykBRpXYrIQRYJfwK6fLQ/3w1rseEcF+KdhbyQFDHysvcA6Q
+uuSJ+GOk3xDPbB5FmKOXDwlYcWkEAQHFhbkNi7e9RqZ8R+1uIaNHdSv1bZanfPew
+xZs1++RWzYEzhSYqbvJdR9o=
+-----END PRIVATE KEY-----`;
+
+const MOCK_SERVICE_ACCOUNT = JSON.stringify({
+  client_email: 'test@project.iam.gserviceaccount.com',
+  private_key: TEST_PRIVATE_KEY,
+});
+
 const mockConfigService = {
   get: jest.fn((key: string) => {
     if (key === 'APPLE_SHARED_SECRET') return 'test-shared-secret';
+    if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return MOCK_SERVICE_ACCOUNT;
+    if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return 'com.example.streeteye';
     return undefined;
   }),
 };
@@ -247,14 +284,152 @@ describe('SubscriptionsService', () => {
   // ── verifyPurchase (Android) ──────────────────────────────────────────────
 
   describe('verifyPurchase — Android', () => {
-    it('throws BadRequestException as Google Play verification is not yet implemented', async () => {
-      await expect(
-        service.verifyPurchase('user-1', {
-          receipt: 'google-purchase-token',
-          platform: 'ANDROID',
-          productId: 'streeteye_premium_monthly',
+    const androidDto = {
+      receipt: 'google-purchase-token',
+      platform: 'ANDROID' as const,
+      productId: 'streeteye_premium_monthly',
+    };
+
+    function mockGoogleFlow(subscriptionData: Record<string, unknown>) {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: jest.fn().mockResolvedValue({ access_token: 'test-access-token' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: jest.fn().mockResolvedValue(subscriptionData),
+        });
+    }
+
+    it('exchanges service account JWT for an access token', async () => {
+      mockGoogleFlow({
+        expiryTimeMillis: String(futureDate.getTime()),
+        orderId: 'GPA.1234-5678-9012-34567',
+        paymentState: 1,
+      });
+      mockPrisma.subscription.upsert.mockResolvedValue({});
+      mockPrisma.subscription.findFirst.mockResolvedValue(mockActiveSubscription);
+
+      await service.verifyPurchase('user-1', androidDto);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://oauth2.googleapis.com/token',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('calls Google Play Developer API with correct URL', async () => {
+      mockGoogleFlow({
+        expiryTimeMillis: String(futureDate.getTime()),
+        orderId: 'GPA.1234-5678-9012-34567',
+        paymentState: 1,
+      });
+      mockPrisma.subscription.upsert.mockResolvedValue({});
+      mockPrisma.subscription.findFirst.mockResolvedValue(mockActiveSubscription);
+
+      await service.verifyPurchase('user-1', androidDto);
+
+      const apiCall = mockFetch.mock.calls[1];
+      expect(apiCall[0]).toBe(
+        'https://androidpublisher.googleapis.com/androidpublisher/v3/applications' +
+          '/com.example.streeteye/purchases/subscriptions/streeteye_premium_monthly' +
+          '/tokens/google-purchase-token',
+      );
+      expect(apiCall[1].headers.Authorization).toBe('Bearer test-access-token');
+    });
+
+    it('upserts subscription with orderId as transactionId', async () => {
+      mockGoogleFlow({
+        expiryTimeMillis: String(futureDate.getTime()),
+        orderId: 'GPA.1234-5678-9012-34567',
+        paymentState: 1,
+      });
+      mockPrisma.subscription.upsert.mockResolvedValue({});
+      mockPrisma.subscription.findFirst.mockResolvedValue(mockActiveSubscription);
+
+      await service.verifyPurchase('user-1', androidDto);
+
+      expect(mockPrisma.subscription.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { transactionId: 'GPA.1234-5678-9012-34567' },
+          create: expect.objectContaining({ platform: 'ANDROID' }),
         }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      );
+    });
+
+    it('accepts free trial (paymentState = 2)', async () => {
+      mockGoogleFlow({
+        expiryTimeMillis: String(futureDate.getTime()),
+        orderId: 'GPA.trial-order',
+        paymentState: 2,
+      });
+      mockPrisma.subscription.upsert.mockResolvedValue({});
+      mockPrisma.subscription.findFirst.mockResolvedValue(mockActiveSubscription);
+
+      const result = await service.verifyPurchase('user-1', androidDto);
+      expect(result.isPremium).toBe(true);
+    });
+
+    it('throws BadRequestException when paymentState is pending (0)', async () => {
+      mockGoogleFlow({
+        expiryTimeMillis: String(futureDate.getTime()),
+        orderId: 'GPA.1234',
+        paymentState: 0,
+      });
+
+      await expect(service.verifyPurchase('user-1', androidDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when Google Play API returns non-200', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: jest.fn().mockResolvedValue({ access_token: 'test-token' }),
+        })
+        .mockResolvedValueOnce({ ok: false });
+
+      await expect(service.verifyPurchase('user-1', androidDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when token exchange fails', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false });
+
+      await expect(service.verifyPurchase('user-1', androidDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when GOOGLE_SERVICE_ACCOUNT_KEY is not configured', async () => {
+      jest
+        .spyOn(mockConfigService, 'get')
+        .mockImplementation((key: string) => {
+          if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return undefined;
+          if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return 'com.example.streeteye';
+          return undefined;
+        });
+
+      await expect(service.verifyPurchase('user-1', androidDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when GOOGLE_PLAY_PACKAGE_NAME is not configured', async () => {
+      jest
+        .spyOn(mockConfigService, 'get')
+        .mockImplementation((key: string) => {
+          if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return MOCK_SERVICE_ACCOUNT;
+          if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return undefined;
+          return undefined;
+        });
+
+      await expect(service.verifyPurchase('user-1', androidDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
   });
 
