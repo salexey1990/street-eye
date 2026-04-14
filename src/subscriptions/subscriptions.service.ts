@@ -31,7 +31,15 @@ export class SubscriptionsService {
     private readonly config: ConfigService,
   ) {}
 
+  private get monetizationEnabled(): boolean {
+    return this.config.get<boolean>('MONETIZATION_ENABLED') === true;
+  }
+
   async verifyPurchase(userId: string, dto: VerifyPurchaseDto) {
+    if (!this.monetizationEnabled) {
+      return this.getStatus(userId);
+    }
+
     let expiresAt: Date;
     let transactionId: string;
 
@@ -62,9 +70,18 @@ export class SubscriptionsService {
     return this.getStatus(userId);
   }
 
-  async getStatus(userId: string) {
+  async getStatus(_userId: string) {
+    if (!this.monetizationEnabled) {
+      return {
+        isPremium: true,
+        plan: 'premium' as const,
+        expiresAt: null,
+        limits: PREMIUM_LIMITS,
+      };
+    }
+
     const subscription = await this.prisma.subscription.findFirst({
-      where: { userId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+      where: { userId: _userId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
       orderBy: { expiresAt: 'desc' },
     });
 
@@ -72,7 +89,7 @@ export class SubscriptionsService {
 
     return {
       isPremium,
-      plan: isPremium ? 'premium' : 'free',
+      plan: isPremium ? ('premium' as const) : ('free' as const),
       expiresAt: subscription?.expiresAt.toISOString() ?? null,
       limits: isPremium ? PREMIUM_LIMITS : FREE_LIMITS,
     };

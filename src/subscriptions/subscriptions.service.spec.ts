@@ -65,6 +65,7 @@ const MOCK_SERVICE_ACCOUNT = JSON.stringify({
 
 const mockConfigService = {
   get: jest.fn((key: string) => {
+    if (key === 'MONETIZATION_ENABLED') return true;
     if (key === 'APPLE_SHARED_SECRET') return 'test-shared-secret';
     if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return MOCK_SERVICE_ACCOUNT;
     if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return 'com.example.streeteye';
@@ -408,6 +409,7 @@ describe('SubscriptionsService', () => {
       jest
         .spyOn(mockConfigService, 'get')
         .mockImplementation((key: string) => {
+          if (key === 'MONETIZATION_ENABLED') return true;
           if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return undefined;
           if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return 'com.example.streeteye';
           return undefined;
@@ -422,6 +424,7 @@ describe('SubscriptionsService', () => {
       jest
         .spyOn(mockConfigService, 'get')
         .mockImplementation((key: string) => {
+          if (key === 'MONETIZATION_ENABLED') return true;
           if (key === 'GOOGLE_SERVICE_ACCOUNT_KEY') return MOCK_SERVICE_ACCOUNT;
           if (key === 'GOOGLE_PLAY_PACKAGE_NAME') return undefined;
           return undefined;

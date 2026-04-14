@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -14,7 +15,10 @@ const BCRYPT_ROUNDS = 12;
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   async findById(id: string): Promise<User> {
     const user = await this.prisma.user.findUnique({ where: { id } });
@@ -74,23 +78,32 @@ export class UsersService {
 
   async getProfileWithStats(id: string) {
     const user = await this.findById(id);
+    const monetizationEnabled = this.config.get<boolean>('MONETIZATION_ENABLED') === true;
 
-    const [totalCompleted, badgesEarned, completedDates, activeSubscription] = await Promise.all([
-      this.prisma.taskSession.count({
-        where: { userId: id, status: 'COMPLETED' },
-      }),
+    const queries: [
+      Promise<number>,
+      Promise<number>,
+      Promise<{ completedAt: Date | null }[]>,
+      Promise<{ expiresAt: Date } | null>,
+    ] = [
+      this.prisma.taskSession.count({ where: { userId: id, status: 'COMPLETED' } }),
       this.prisma.userBadge.count({ where: { userId: id } }),
       this.prisma.taskSession.findMany({
         where: { userId: id, status: 'COMPLETED', completedAt: { not: null } },
         select: { completedAt: true },
         orderBy: { completedAt: 'desc' },
       }),
-      this.prisma.subscription.findFirst({
-        where: { userId: id, status: 'ACTIVE', expiresAt: { gt: new Date() } },
-        select: { expiresAt: true },
-        orderBy: { expiresAt: 'desc' },
-      }),
-    ]);
+      monetizationEnabled
+        ? this.prisma.subscription.findFirst({
+            where: { userId: id, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+            select: { expiresAt: true },
+            orderBy: { expiresAt: 'desc' },
+          })
+        : Promise.resolve(null),
+    ];
+
+    const [totalCompleted, badgesEarned, completedDates, activeSubscription] =
+      await Promise.all(queries);
 
     const currentStreak = this.calculateStreak(
       completedDates.map((s) => s.completedAt as Date),
@@ -104,7 +117,7 @@ export class UsersService {
       level: user.level,
       preferredCategories: user.preferredCategories,
       createdAt: user.createdAt.toISOString(),
-      isPremium: activeSubscription !== null,
+      isPremium: monetizationEnabled ? activeSubscription !== null : true,
       subscriptionExpiresAt: activeSubscription?.expiresAt.toISOString() ?? null,
       stats: { totalCompleted, currentStreak, badgesEarned },
     };

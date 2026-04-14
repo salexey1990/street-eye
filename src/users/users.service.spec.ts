@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException, ConflictException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { UsersService } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -47,6 +48,10 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: PrismaService, useValue: mockPrisma },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => key === 'MONETIZATION_ENABLED' ? true : undefined },
+        },
       ],
     }).compile();
 

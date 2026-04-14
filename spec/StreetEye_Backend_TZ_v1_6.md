@@ -1,9 +1,9 @@
 # StreetEye — Техническое задание: Бэкенд MVP
 
-> **Версия:** 1.5 · Апрель 2026  
+> **Версия:** 1.6 · Апрель 2026  
 > **Стек:** NestJS · PostgreSQL · Redis · Docker Compose  
 > **Срок:** 10 недель  
-> **Связанные docs:** StreetEye MVP Specification v1.1
+> **Связанные docs:** StreetEye MVP Specification v1.5
 
 ---
 
@@ -25,8 +25,8 @@
 | BadgesModule | Логика выдачи бейджей, трекинг | JournalModule, UsersModule |
 | MailModule | Отправка писем через Resend. Шаблоны на ru и en — язык выбирается по полю `locale` пользователя | — |
 | NotificationsModule | Хранение push-токенов, отправка push-уведомлений через Expo Push API | UsersModule |
-| SubscriptionsModule | Верификация покупок (App Store / Google Play), статус подписки, лимиты Free/Premium | UsersModule |
-| PromoModule | Генерация и активация промокодов, выдача lifetime Premium | SubscriptionsModule, UsersModule |
+| SubscriptionsModule | Верификация покупок (App Store / Google Play), статус подписки, лимиты Free/Premium. **При запуске MVP деактивирован** (см. раздел 8b) | UsersModule |
+| PromoModule | Генерация и активация промокодов, выдача lifetime Premium. **При запуске MVP деактивирован** (см. раздел 8c) | SubscriptionsModule, UsersModule |
 | HealthModule | Health-check эндпоинт для мониторинга | — |
 
 ### 1.2 Стек технологий
@@ -688,6 +688,23 @@ async sendPush(userId: string, titleKey: string, bodyKey: string, data?: Record<
 
 ## 8b. SubscriptionsModule — подписки и монетизация
 
+> **🚫 MVP Launch Policy (v1.6): модуль деактивирован при запуске**
+>
+> `SubscriptionsModule` **реализован** и присутствует в кодовой базе, но **не применяет ограничения** на период первичного запуска MVP. Управляется переменной окружения `MONETIZATION_ENABLED`.
+>
+> **Поведение при `MONETIZATION_ENABLED=false` (режим запуска):**
+> - `GET /subscriptions/status` возвращает `isPremium: true` для всех пользователей
+> - Лимиты (`tasksPerMonth`, `anotherTaskPerSession`, `journalEntriesVisible`) не применяются
+> - `UserProfileDto.isPremium` всегда `true` — клиент снимает все ограничения
+> - Эндпоинты `/subscriptions/verify` и `/subscriptions/restore` принимают запросы, но возвращают успех без реальной верификации через App Store / Google Play
+>
+> **Как включить монетизацию (v1.1):**
+> 1. Установить `MONETIZATION_ENABLED=true` в env
+> 2. Добавить `APPLE_SHARED_SECRET` и `GOOGLE_SERVICE_ACCOUNT_KEY` в env
+> 3. Проверить флоу: достижение лимита → paywall → покупка → верификация → снятие лимита
+>
+> Переменная `MONETIZATION_ENABLED` проверяется в `SubscriptionsService.getStatus()` и в guard `PremiumGuard` (если используется).
+
 Управляет статусом подписки пользователя. Верифицирует покупки через App Store / Google Play. Предоставляет информацию о лимитах Free/Premium плана.
 
 ### 8b.1 Эндпоинты
@@ -763,6 +780,10 @@ class UserProfileDto {
 ---
 
 ## 8c. PromoModule — промокоды
+
+> **🚫 MVP Launch Policy (v1.6): модуль деактивирован при запуске**
+>
+> `PromoModule` **реализован**, но точки входа (`POST /promo/redeem`) недоступны пользователям при `MONETIZATION_ENABLED=false`. Административные эндпоинты (`POST /promo/generate`, `GET /promo/list`) работают в любом режиме — промокоды можно готовить заранее. Включается вместе с `SubscriptionsModule` при переходе к v1.1.
 
 Промокоды — альтернатива подписке через App Store / Google Play. Каждый код одноразовый, даёт lifetime Premium. Создаются через защищённый API-эндпоинт. Отзыв кода в MVP не реализуется.
 
@@ -968,6 +989,8 @@ SUPPORTED_LOCALES=en,ru       # список через запятую — ва�
 EXPO_ACCESS_TOKEN=<токен для Expo Push API>
 
 # In-App Purchases
+# При MONETIZATION_ENABLED=false — верификация не выполняется, isPremium всегда true
+MONETIZATION_ENABLED=false
 APPLE_SHARED_SECRET=<shared secret для верификации App Store receipts>
 GOOGLE_SERVICE_ACCOUNT_KEY=<путь к JSON-ключу сервисного аккаунта Google Play>
 
@@ -1109,7 +1132,7 @@ GET /health
 | 5–6 | TasksModule | Модель Task с полями `_ru`/`_en`, seed-скрипт (30 заданий, JSON с ru + en контентом); SessionsModule: `POST /sessions` для создания сессии, статусы, активная сессия; `GET /tasks/random` с логикой исключений и разрешением локали по Accept-Language; Тесты логики randomizer | Мобильное приложение может получать задания |
 | 7 | JournalModule | CRUD записей дневника; `GET /journal/stats` со streak-логикой; Redis кэш для stats (5 мин); Тесты граничных случаев streak | Дневник полностью работает |
 | 8 | BadgesModule + NotificationsModule | 4 бейджа, checkAndAward логика; Seed бейджей в БД; Push-токены (`POST /users/me/push-token`); Cron-задачи напоминаний и streak-уведомлений; Тесты условий бейджей | Бейджи и push-уведомления работают |
-| 9 | SubscriptionsModule + PromoModule | Верификация покупок App Store / Google Play; `GET /subscriptions/status`; Лимиты Free/Premium; `isPremium` в `UserProfileDto`; Таблица `promo_codes`, генерация и активация промокодов, `POST /promo/redeem`, `POST /promo/generate` с API-ключом; Тесты верификации, лимитов и промокодов | Монетизация и промокоды на бэкенде готовы |
+| 9 | SubscriptionsModule + PromoModule | Верификация покупок App Store / Google Play; `GET /subscriptions/status` (возвращает `isPremium: true` при `MONETIZATION_ENABLED=false`); лимиты Free/Premium (применяются только при `MONETIZATION_ENABLED=true`); `isPremium` в `UserProfileDto`; таблица `promo_codes`, генерация и активация промокодов, `POST /promo/redeem` (заблокирован при `MONETIZATION_ENABLED=false`), `POST /promo/generate` с API-ключом; тесты верификации, лимитов и промокодов | Монетизация реализована и готова к включению в v1.1 |
 | 10 | Полировка | E2E тесты всех критических флоу; GitHub Actions CI/CD пайплайн; Деплой на VPS, prod Docker Compose; Нагрузочный тест (Artillery): 100 rps; Документация API (Swagger через @nestjs/swagger) | Бэкенд готов к публичному запуску |
 
 ---
@@ -1158,7 +1181,7 @@ GET /health
 | Параметр | Значение | Комментарий |
 |---|---|---|
 | Модулей | 11 | Auth, Users, Tasks, Sessions, Journal, Badges, Mail, Notifications, Subscriptions, Promo, Health |
-| Эндпоинтов | 41 | Полный API для мобильного клиента, включая гостевой доступ, push-токены, подписки и промокоды |
+| Эндпоинтов | 41 | Полный API для мобильного клиента, включая гостевой доступ, push-токены, подписки и промокоды. При запуске MVP эндпоинты подписок/промокодов не применяют ограничений (`MONETIZATION_ENABLED=false`) |
 | Таблиц в БД | 11 | Users, RefreshTokens, EmailTokens, Tasks, Sessions, Journal, Badges, UserBadges, PushTokens, Subscriptions, PromoCodes |
 | Поддерживаемые языки | 2 | EN (default) + RU. Accept-Language + locale в профиле + env fallback |
 | Платные зависимости | 0 | Resend: 3 000 писем/мес бесплатно — хватит на MVP |
@@ -1167,4 +1190,4 @@ GET /health
 
 ---
 
-*StreetEye Backend TZ v1.5 · Апрель 2026*
+*StreetEye Backend TZ v1.6 · Апрель 2026*

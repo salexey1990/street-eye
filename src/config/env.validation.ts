@@ -29,4 +29,6 @@ export const envValidationSchema = Joi.object({
   GOOGLE_PLAY_PACKAGE_NAME: Joi.string().optional(),
 
   ADMIN_API_KEY: Joi.string().min(32).optional(),
+
+  MONETIZATION_ENABLED: Joi.boolean().default(false),
 });
