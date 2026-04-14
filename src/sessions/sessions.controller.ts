@@ -32,12 +32,23 @@ const SESSION_ID = 'c3d4e5f6-a7b8-9012-cdef-123456789012';
 const SESSION_ID_2 = 'd4e5f6a7-b8c9-0123-defa-234567890123';
 const STARTED_AT = '2026-03-15T09:30:00.000Z';
 
+const EMBEDDED_TASK = {
+  id: TASK_ID,
+  title: 'Shadows Only',
+  description: 'Find and photograph only shadows — no subjects, just their shadows on surfaces.',
+  tip: 'Look for long shadows in the morning or evening when the sun is low.',
+  category: 'VISUAL',
+  level: 'BEGINNER',
+  durationMins: 60,
+  tags: ['light', 'shadow', 'abstract'],
+};
+
 const SESSION_RESPONSE = {
   id: SESSION_ID,
-  taskId: TASK_ID,
   status: 'ACTIVE',
   startedAt: STARTED_AT,
   completedAt: null,
+  task: EMBEDDED_TASK,
 };
 
 @ApiTags('sessions')
@@ -97,33 +108,26 @@ export class SessionsController {
       },
     },
   })
-  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateSessionDto) {
-    return this.sessionsService.create(user.sub, dto);
+  create(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateSessionDto,
+    @Locale() locale: string,
+  ) {
+    return this.sessionsService.create(user.sub, dto, locale);
   }
 
   @Get('active')
   @ApiOperation({
     summary: 'Get active session',
-    description: 'Returns the current active task session with full task details. Use on app launch to restore an in-progress task.',
+    description: 'Returns the current active task session with embedded task details resolved for the requested locale.',
   })
   @ApiResponse({
     status: 200,
-    description: 'Active session with task details.',
+    description: 'Active session with embedded task.',
     schema: {
       example: {
         success: true,
-        data: {
-          id: SESSION_ID,
-          title: 'Shadows Only',
-          description: 'Find and photograph only shadows — no subjects, just their shadows on surfaces.',
-          tip: 'Look for long shadows in the morning or evening when the sun is low.',
-          category: 'VISUAL',
-          level: 'BEGINNER',
-          durationMins: 60,
-          tags: ['light', 'shadow', 'abstract'],
-          sessionId: SESSION_ID,
-          startedAt: STARTED_AT,
-        },
+        data: SESSION_RESPONSE,
         meta: { timestamp: TIMESTAMP },
       },
     },
@@ -162,15 +166,13 @@ export class SessionsController {
   @ApiParam({ name: 'id', description: 'Session UUID', example: SESSION_ID })
   @ApiResponse({
     status: 200,
-    description: 'Session updated.',
+    description: 'Session updated with embedded task.',
     schema: {
       example: {
         success: true,
         data: {
-          id: SESSION_ID,
-          taskId: TASK_ID,
+          ...SESSION_RESPONSE,
           status: 'COMPLETED',
-          startedAt: STARTED_AT,
           completedAt: TIMESTAMP,
         },
         meta: { timestamp: TIMESTAMP },
@@ -225,40 +227,40 @@ export class SessionsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateSessionDto,
+    @Locale() locale: string,
   ) {
-    return this.sessionsService.updateStatus(id, user.sub, dto);
+    return this.sessionsService.updateStatus(id, user.sub, dto, locale);
   }
 
   @Get()
   @ApiOperation({
     summary: 'List sessions (cursor-based)',
-    description: 'Returns the user\'s session history with cursor-based pagination. Optionally filter by status.',
+    description: "Returns the user's session history with cursor-based pagination. Each session includes the full embedded task resolved for the requested locale.",
   })
   @ApiResponse({
     status: 200,
-    description: 'Paginated session list.',
+    description: 'Paginated session list with embedded tasks.',
     schema: {
       example: {
         success: true,
         data: {
           items: [
-            {
-              id: SESSION_ID,
-              taskId: TASK_ID,
-              category: 'VISUAL',
-              level: 'BEGINNER',
-              status: 'COMPLETED',
-              startedAt: STARTED_AT,
-              completedAt: TIMESTAMP,
-            },
+            SESSION_RESPONSE,
             {
               id: SESSION_ID_2,
-              taskId: 'e5f6a7b8-c9d0-1234-efab-345678901234',
-              category: 'SOCIAL',
-              level: 'INTERMEDIATE',
               status: 'SKIPPED',
               startedAt: '2026-03-14T14:00:00.000Z',
               completedAt: null,
+              task: {
+                id: 'e5f6a7b8-c9d0-1234-efab-345678901234',
+                title: 'Strangers in the City',
+                description: 'Photograph strangers in candid moments on the street.',
+                tip: 'Smile and ask permission when in doubt.',
+                category: 'SOCIAL',
+                level: 'INTERMEDIATE',
+                durationMins: 90,
+                tags: ['people', 'candid', 'street'],
+              },
             },
           ],
           nextCursor: null,
@@ -279,7 +281,11 @@ export class SessionsController {
       },
     },
   })
-  findAll(@CurrentUser() user: JwtPayload, @Query() query: SessionsQueryDto) {
-    return this.sessionsService.findAll(user.sub, query);
+  findAll(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: SessionsQueryDto,
+    @Locale() locale: string,
+  ) {
+    return this.sessionsService.findAll(user.sub, query, locale);
   }
 }

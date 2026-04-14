@@ -87,32 +87,55 @@ describe('SessionsService', () => {
   });
 
   describe('create', () => {
-    it('should create a session for a valid task', async () => {
+    it('should create a session with embedded task', async () => {
       mockPrisma.taskSession.findFirst.mockResolvedValue(null);
       mockPrisma.task.findUnique.mockResolvedValue(mockTask);
       mockPrisma.taskSession.create.mockResolvedValue({
         id: 'session-new',
+        userId: 'user-1',
         taskId: 'task-1',
         status: 'ACTIVE' as SessionStatus,
         startedAt: now,
         completedAt: null,
+        task: mockTask,
       });
 
-      const result = await service.create('user-1', { taskId: 'task-1' });
+      const result = await service.create('user-1', { taskId: 'task-1' }, 'en');
 
       expect(result.id).toBe('session-new');
-      expect(result.taskId).toBe('task-1');
       expect(result.status).toBe('ACTIVE');
+      expect(result.task.id).toBe('task-1');
+      expect(result.task.title).toBe('Shadows');
+      expect(result.completedAt).toBeNull();
       expect(mockPrisma.taskSession.create).toHaveBeenCalledWith({
         data: { userId: 'user-1', taskId: 'task-1', status: 'ACTIVE' },
+        include: { task: true },
       });
+    });
+
+    it('should return localized task on create', async () => {
+      mockPrisma.taskSession.findFirst.mockResolvedValue(null);
+      mockPrisma.task.findUnique.mockResolvedValue(mockTask);
+      mockPrisma.taskSession.create.mockResolvedValue({
+        id: 'session-new',
+        userId: 'user-1',
+        taskId: 'task-1',
+        status: 'ACTIVE' as SessionStatus,
+        startedAt: now,
+        completedAt: null,
+        task: mockTask,
+      });
+
+      const result = await service.create('user-1', { taskId: 'task-1' }, 'ru');
+
+      expect(result.task.title).toBe('Тени');
     });
 
     it('should throw ConflictException if active session exists', async () => {
       mockPrisma.taskSession.findFirst.mockResolvedValue(mockActiveSession);
 
       await expect(
-        service.create('user-1', { taskId: 'task-1' }),
+        service.create('user-1', { taskId: 'task-1' }, 'en'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -121,23 +144,33 @@ describe('SessionsService', () => {
       mockPrisma.task.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.create('user-1', { taskId: 'bad-id' }),
+        service.create('user-1', { taskId: 'bad-id' }, 'en'),
       ).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('getActive', () => {
-    it('should return active session with localized task', async () => {
+    it('should return active session with embedded localized task', async () => {
       mockPrisma.taskSession.findFirst.mockResolvedValue(mockActiveSession);
 
       const result = await service.getActive('user-1', 'en');
 
-      expect(result.sessionId).toBe('session-1');
-      expect(result.title).toBe('Shadows');
+      expect(result.id).toBe('session-1');
+      expect(result.status).toBe('ACTIVE');
+      expect(result.task.id).toBe('task-1');
+      expect(result.task.title).toBe('Shadows');
       expect(mockPrisma.taskSession.findFirst).toHaveBeenCalledWith({
         where: { userId: 'user-1', status: 'ACTIVE' },
         include: { task: true },
       });
+    });
+
+    it('should return ru locale task', async () => {
+      mockPrisma.taskSession.findFirst.mockResolvedValue(mockActiveSession);
+
+      const result = await service.getActive('user-1', 'ru');
+
+      expect(result.task.title).toBe('Тени');
     });
 
     it('should throw NotFoundException when no active session', async () => {
@@ -150,7 +183,7 @@ describe('SessionsService', () => {
   });
 
   describe('updateStatus', () => {
-    it('should complete a session and set completedAt', async () => {
+    it('should complete a session and return embedded task', async () => {
       mockPrisma.taskSession.findUnique.mockResolvedValue(mockActiveSession);
       mockPrisma.taskSession.update.mockResolvedValue({
         ...mockActiveSession,
@@ -160,13 +193,15 @@ describe('SessionsService', () => {
 
       const result = await service.updateStatus('session-1', 'user-1', {
         status: 'COMPLETED',
-      });
+      }, 'en');
 
       expect(result.status).toBe('COMPLETED');
       expect(result.completedAt).toBeDefined();
+      expect(result.task.id).toBe('task-1');
       expect(mockPrisma.taskSession.update).toHaveBeenCalledWith({
         where: { id: 'session-1' },
         data: { status: 'COMPLETED', completedAt: expect.any(Date) },
+        include: { task: true },
       });
     });
 
@@ -179,12 +214,14 @@ describe('SessionsService', () => {
 
       const result = await service.updateStatus('session-1', 'user-1', {
         status: 'SKIPPED',
-      });
+      }, 'en');
 
       expect(result.status).toBe('SKIPPED');
+      expect(result.completedAt).toBeNull();
       expect(mockPrisma.taskSession.update).toHaveBeenCalledWith({
         where: { id: 'session-1' },
         data: { status: 'SKIPPED' },
+        include: { task: true },
       });
     });
 
@@ -197,7 +234,7 @@ describe('SessionsService', () => {
 
       const result = await service.updateStatus('session-1', 'user-1', {
         status: 'SAVED_FOR_LATER',
-      });
+      }, 'en');
 
       expect(result.status).toBe('SAVED_FOR_LATER');
     });
@@ -206,7 +243,7 @@ describe('SessionsService', () => {
       mockPrisma.taskSession.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.updateStatus('bad-id', 'user-1', { status: 'COMPLETED' }),
+        service.updateStatus('bad-id', 'user-1', { status: 'COMPLETED' }, 'en'),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -216,7 +253,7 @@ describe('SessionsService', () => {
       await expect(
         service.updateStatus('session-1', 'other-user', {
           status: 'COMPLETED',
-        }),
+        }, 'en'),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -227,7 +264,7 @@ describe('SessionsService', () => {
       });
 
       await expect(
-        service.updateStatus('session-1', 'user-1', { status: 'SKIPPED' }),
+        service.updateStatus('session-1', 'user-1', { status: 'SKIPPED' }, 'en'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -240,7 +277,7 @@ describe('SessionsService', () => {
       await expect(
         service.updateStatus('session-1', 'user-1', {
           status: 'COMPLETED',
-        }),
+        }, 'en'),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -248,52 +285,36 @@ describe('SessionsService', () => {
       mockPrisma.taskSession.findUnique.mockResolvedValue(mockActiveSession);
 
       await expect(
-        service.updateStatus('session-1', 'user-1', { status: 'ACTIVE' }),
+        service.updateStatus('session-1', 'user-1', { status: 'ACTIVE' }, 'en'),
       ).rejects.toThrow(BadRequestException);
     });
   });
 
   describe('findAll', () => {
-    it('should return cursor-paginated sessions', async () => {
+    it('should return cursor-paginated sessions with embedded tasks', async () => {
       const sessions = [
-        {
-          id: 's-1',
-          taskId: 'task-1',
-          status: 'COMPLETED',
-          startedAt: now,
-          completedAt: now,
-          task: { id: 'task-1', category: 'VISUAL', level: 'BEGINNER' },
-        },
-        {
-          id: 's-2',
-          taskId: 'task-1',
-          status: 'ACTIVE',
-          startedAt: now,
-          completedAt: null,
-          task: { id: 'task-1', category: 'VISUAL', level: 'BEGINNER' },
-        },
+        { ...mockActiveSession, id: 's-1', status: 'COMPLETED', completedAt: now },
+        { ...mockActiveSession, id: 's-2' },
       ];
       mockPrisma.taskSession.findMany.mockResolvedValue(sessions);
 
-      const result = await service.findAll('user-1', { limit: 20 });
+      const result = await service.findAll('user-1', { limit: 20 }, 'en');
 
       expect(result.items).toHaveLength(2);
+      expect(result.items[0].task.id).toBe('task-1');
+      expect(result.items[0].task.title).toBe('Shadows');
       expect(result.hasMore).toBe(false);
       expect(result.nextCursor).toBeNull();
     });
 
     it('should detect hasMore when more items exist', async () => {
       const sessions = Array.from({ length: 3 }, (_, i) => ({
+        ...mockActiveSession,
         id: `s-${i}`,
-        taskId: 'task-1',
-        status: 'COMPLETED',
-        startedAt: now,
-        completedAt: now,
-        task: { id: 'task-1', category: 'VISUAL', level: 'BEGINNER' },
       }));
       mockPrisma.taskSession.findMany.mockResolvedValue(sessions);
 
-      const result = await service.findAll('user-1', { limit: 2 });
+      const result = await service.findAll('user-1', { limit: 2 }, 'en');
 
       expect(result.items).toHaveLength(2);
       expect(result.hasMore).toBe(true);
@@ -303,14 +324,12 @@ describe('SessionsService', () => {
     it('should filter by status', async () => {
       mockPrisma.taskSession.findMany.mockResolvedValue([]);
 
-      await service.findAll('user-1', {
-        status: 'COMPLETED',
-        limit: 20,
-      });
+      await service.findAll('user-1', { status: 'COMPLETED', limit: 20 }, 'en');
 
       expect(mockPrisma.taskSession.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { userId: 'user-1', status: 'COMPLETED' },
+          include: { task: true },
         }),
       );
     });

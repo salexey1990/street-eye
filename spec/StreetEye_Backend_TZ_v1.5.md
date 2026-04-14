@@ -1,6 +1,6 @@
 # StreetEye — Техническое задание: Бэкенд MVP
 
-> **Версия:** 1.4 · Апрель 2026  
+> **Версия:** 1.5 · Апрель 2026  
 > **Стек:** NestJS · PostgreSQL · Redis · Docker Compose  
 > **Срок:** 10 недель  
 > **Связанные docs:** StreetEye MVP Specification v1.1
@@ -480,12 +480,37 @@ class TaskDto {
 
 | Метод | Путь | Описание |
 |---|---|---|
-| POST | `/sessions` | Создать сессию для задания. Вызывается при нажатии «Взять это» или автоматически после регистрации гостя для миграции задания из онбординга. Тело: `{ taskId }`. Возвращает `sessionId`. Запрещено, если уже есть `ACTIVE` сессия |
-| GET | `/sessions/active` | Активная сессия пользователя. Возвращает задание + sessionId или 404 |
-| PATCH | `/sessions/:id` | Обновить статус сессии: `COMPLETED` \| `SKIPPED` \| `SAVED_FOR_LATER` |
-| GET | `/sessions` | История сессий. Query: `status`, `limit` (max 50), `cursor` (cursor-based pagination) |
+| POST | `/sessions` | Создать сессию для задания. Вызывается при нажатии «Взять это» или автоматически после регистрации гостя для миграции задания из онбординга. Тело: `{ taskId }`. Возвращает `TaskSessionDto`. Запрещено, если уже есть `ACTIVE` сессия |
+| GET | `/sessions/active` | Активная сессия пользователя. Возвращает `TaskSessionDto` или 404 |
+| PATCH | `/sessions/:id` | Обновить статус сессии: `COMPLETED` \| `SKIPPED` \| `SAVED_FOR_LATER`. Возвращает обновлённый `TaskSessionDto` |
+| GET | `/sessions` | История сессий с вложенным заданием. Query: `status`, `limit` (max 50), `cursor` (cursor-based pagination). Возвращает `TaskSessionDto[]` |
 
 **Сценарий миграции гостевого задания:** после регистрации клиент вызывает `POST /sessions` с `taskId` задания из онбординга, затем сразу `PATCH /sessions/:id` с `status: COMPLETED`. С точки зрения бэкенда это обычные вызовы — специальной логики миграции не требуется. Вся оркестрация на стороне клиента.
+
+### 6.1a Response: TaskSessionDto
+
+Все эндпоинты SessionsModule возвращают сессию с вложенным заданием. Клиенту не нужно делать дополнительных запросов для получения данных задания. Бэкенд разрешает локаль задания по `Accept-Language` перед отдачей — клиент получает `title`, `description`, `tip` на нужном языке.
+
+```typescript
+class TaskSessionDto {
+  id:          string;
+  status:      SessionStatus;  // ACTIVE | COMPLETED | SKIPPED | SAVED_FOR_LATER
+  startedAt:   string;         // ISO 8601
+  completedAt: string | null;  // ISO 8601, null для ACTIVE и SAVED_FOR_LATER
+  task: {
+    id:           string;
+    title:        string;      // уже на нужной локали
+    description:  string;
+    tip:          string;
+    category:     Category;
+    level:        Level;
+    durationMins: number;
+    tags:         string[];
+  };
+}
+```
+
+Реализация через Prisma: `include: { task: true }` в каждом запросе SessionsModule. Поля `_ru`/`_en` разрешаются в `TaskSessionDto` через тот же `LocaleInterceptor`, что используется в TasksModule.
 
 ### 6.2 Правила статусов
 
@@ -1142,4 +1167,4 @@ GET /health
 
 ---
 
-*StreetEye Backend TZ v1.4 · Апрель 2026*
+*StreetEye Backend TZ v1.5 · Апрель 2026*
