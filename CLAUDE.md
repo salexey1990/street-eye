@@ -38,39 +38,37 @@ NestJS monolith with modular domain isolation. Intentionally not microservices �
 
 **Module dependency graph:**
 ```
-AuthModule      → UsersModule, MailModule, Redis
-UsersModule     → (no deps)
-TasksModule     → UsersModule
-SessionsModule  → TasksModule, UsersModule
-JournalModule   → SessionsModule, UsersModule
-BadgesModule    → JournalModule, UsersModule
-MailModule      → (no deps)
-HealthModule    → (no deps)
+AuthModule           → UsersModule, MailModule, Redis
+UsersModule          → (no deps)
+TasksModule          → UsersModule
+SessionsModule       → TasksModule, UsersModule
+NotificationsModule  → (no deps)
+SubscriptionsModule  → (no deps)
+PromoModule          → SubscriptionsModule
+JournalModule        → Redis (own client)
+BadgesModule         → JournalModule, NotificationsModule
+MailModule           → (no deps)
+HealthModule         → (no deps)
 ```
 
-**Current `src/` structure (implemented modules marked ✅):**
+**Current `src/` structure:**
 ```
 src/
-├── common/          ✅ JwtAuthGuard, @CurrentUser, @Public, GlobalExceptionFilter, TransformInterceptor, LocaleInterceptor, Swagger helpers
-├── config/          ✅ ConfigModule with Joi env validation (env.validation.ts)
-├── prisma/          ✅ PrismaService + PrismaModule
-├── auth/            ✅ JWT + refresh tokens (PostgreSQL), email verification, password reset
-│   ├── dto/         ✅ login, register (with onboarding fields), refresh, forgot-password, reset-password, verify-email, resend-verify
-│   └── strategies/  ✅ jwt.strategy.ts
-├── users/           ✅ Profile CRUD, change password, isPremium in profile
-│   └── dto/         ✅ update-user, change-password
-├── mail/            ✅ Resend SDK, bilingual HTML templates (verify-email, reset-password ru/en)
-├── health/          ✅ Health-check endpoint
-├── tasks/           ✅ Task CRUD, random selection with locale resolution, guest endpoint, seed data (30 tasks)
-│   └── dto/         ✅ task.dto, tasks-query.dto, guest-random-task-query.dto
-├── sessions/        ✅ Active session management, status transitions, cursor pagination
-│   └── dto/         ✅ update-session.dto, sessions-query.dto
-├── notifications/   ✅ Push tokens (Expo), cron reminders (daily + streak warnings)
-│   └── dto/         ✅ save-push-token.dto
-├── subscriptions/   ✅ IAP verification (App Store / Google Play), status, limits
-│   └── dto/         ✅ verify-purchase.dto
-├── journal/         ⬜ Completed assignments with photos, notes, self-evaluation
-└── badges/          ⬜ Achievement logic and milestone tracking
+├── common/          JwtAuthGuard, AdminKeyGuard, @CurrentUser, @Public, @Locale, GlobalExceptionFilter,
+│                    TransformInterceptor, LocaleInterceptor, LoggingMiddleware, Swagger helpers
+├── config/          ConfigModule with Joi env validation (env.validation.ts)
+├── prisma/          PrismaService + PrismaModule
+├── auth/            JWT + refresh tokens (Redis), email verification, password reset
+├── users/           Profile CRUD, change password, isPremium in profile
+├── mail/            Resend SDK, bilingual HTML templates (verify-email, reset-password ru/en)
+├── health/          Health-check endpoint
+├── tasks/           Task CRUD, random selection with locale resolution, guest endpoint, seed data (30 tasks)
+├── sessions/        Active session management, status transitions (ACTIVE→COMPLETED/SKIPPED), cursor pagination
+├── notifications/   Push tokens (Expo), cron reminders (daily + streak warnings)
+├── subscriptions/   IAP verification (App Store / Google Play), status, limits
+├── promo/           Promo code generation (admin) and redemption → grants lifetime premium subscription
+├── journal/         Journal entries for completed sessions; stats (streaks, by-category, by-rating) cached in Redis
+└── badges/          Achievement checks (FIRST_STEP, WEEK, STREAK_3, ALL_CATEGORIES); push notification on award
 ```
 
 ## Database (Prisma + PostgreSQL)
