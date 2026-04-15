@@ -211,7 +211,7 @@ export class JournalService {
     }
 
     // Compute current streak: walk back from the last date
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now()).toISOString().slice(0, 10);
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const lastDate = sorted[sorted.length - 1];
 
